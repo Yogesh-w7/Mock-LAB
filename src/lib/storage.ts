@@ -5,6 +5,7 @@ export type QuestionWithImage = {
   id: string;
   questionNumber: number;
   question: string;
+  context?: string;
   options: Partial<Record<OptionLetter, string>>;
   correctAnswer: OptionLetter | null;
   imageDataUrl?: string;
@@ -12,14 +13,6 @@ export type QuestionWithImage = {
 
 /**
  * Configuration for an individual exam section.
- *
- * Example:
- * {
- *   key: "english-language",
- *   title: "English Language",
- *   minutes: 20,
- *   questionNumbers: [1, 2, 3, 4, 5]
- * }
  */
 export type ExamSectionConfig = {
   key: string;
@@ -39,8 +32,7 @@ export type ExamConfig = {
 /**
  * A saved question paper.
  *
- * examConfig is optional to maintain compatibility with
- * papers saved before multi-section support was added.
+ * examConfig is optional for backward compatibility.
  */
 export type SavedPaper = {
   id: string;
