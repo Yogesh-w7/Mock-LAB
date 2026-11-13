@@ -6,7 +6,9 @@ export function createClient() {
   const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 
   if (!url || !key) {
-    throw new Error("Supabase URL or publishable key is missing.");
+    throw new Error(
+      "Supabase URL or publishable key is missing."
+    );
   }
 
   return createBrowserClient(url, key);
