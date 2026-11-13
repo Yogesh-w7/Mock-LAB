@@ -1,6 +1,8 @@
+
 "use client";
 
 import Link from "next/link";
+import { createElement } from "react";
 import type { ComponentType, ReactNode } from "react";
 
 import {
@@ -13,34 +15,75 @@ import {
 } from "@/lib/bankprep-data";
 
 // --- Inline SVGs & Micro-Icons ---
+
 function IconFileText({ className = "w-5 h-5" }: { className?: string }) {
   return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+    <svg
+      className={className}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+      />
     </svg>
   );
 }
 
 function IconInbox({ className = "w-6 h-6" }: { className?: string }) {
   return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-4.586a1 1 0 00-.707.293l-1.414 1.414a2 2 0 01-1.414.586h-3.172a2 2 0 01-1.414-.586l-1.414-1.414A1 1 0 006.586 13H2" />
+    <svg
+      className={className}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={1.75}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-4.586a1 1 0 00-.707.293l-1.414 1.414a2 2 0 01-1.414.586h-3.172a2 2 0 01-1.414-.586l-1.414-1.414A1 1 0 006.586 13H2"
+      />
     </svg>
   );
 }
 
 function IconArrowRight({ className = "w-4 h-4" }: { className?: string }) {
   return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3" />
+    <svg
+      className={className}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2.5}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M14 5l7 7m0 0l-7 7m7-7H3"
+      />
     </svg>
   );
 }
 
 function IconArrowUpRight({ className = "w-4 h-4" }: { className?: string }) {
   return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M7 17L17 7m0 0H7m10 0v10" />
+    <svg
+      className={className}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2.5}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M7 17L17 7m0 0H7m10 0v10"
+      />
     </svg>
   );
 }
@@ -55,7 +98,13 @@ function IconPlay({ className = "w-3.5 h-3.5" }: { className?: string }) {
 
 function IconClock({ className = "w-3.5 h-3.5" }: { className?: string }) {
   return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <svg
+      className={className}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+    >
       <circle cx="12" cy="12" r="9" />
       <path strokeLinecap="round" strokeLinejoin="round" d="M12 7v5l3 2" />
     </svg>
@@ -64,9 +113,19 @@ function IconClock({ className = "w-3.5 h-3.5" }: { className?: string }) {
 
 function IconHelpCircle({ className = "w-3.5 h-3.5" }: { className?: string }) {
   return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <svg
+      className={className}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+    >
       <circle cx="12" cy="12" r="9" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3m.08 4h.01" />
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3m.08 4h.01"
+      />
     </svg>
   );
 }
@@ -252,7 +311,8 @@ export function AttemptRow({
           {attempt.title}
         </p>
         <p className="text-[11px] font-medium text-slate-400">
-          {attempt.section} <span className="text-slate-300">·</span> {formatDate(attempt.date)}
+          {attempt.section} <span className="text-slate-300">·</span>{" "}
+          {formatDate(attempt.date)}
         </p>
       </div>
 
@@ -261,14 +321,20 @@ export function AttemptRow({
           <p className="font-mono text-xs font-bold text-slate-900 sm:text-sm">
             {attempt.score}/{attempt.total}
           </p>
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Score</p>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+            Score
+          </p>
         </div>
 
         <div className="text-right">
-          <span className={`inline-flex rounded-lg border px-2 py-0.5 text-xs font-bold ${toneStyle}`}>
+          <span
+            className={`inline-flex rounded-lg border px-2 py-0.5 text-xs font-bold ${toneStyle}`}
+          >
             {accuracy}%
           </span>
-          <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Accuracy</p>
+          <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+            Accuracy
+          </p>
         </div>
 
         <IconArrowUpRight className="h-4 w-4 text-slate-300 transition group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-slate-700" />
@@ -290,8 +356,6 @@ export function StatCard({
   note: string;
   icon: string | ComponentType<{ className?: string }>;
 }) {
-  const IconComponent = typeof icon !== "string" ? icon : null;
-
   return (
     <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm transition hover:shadow-md">
       <div className="flex items-center justify-between gap-3">
@@ -300,10 +364,10 @@ export function StatCard({
         </p>
 
         <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-indigo-100 bg-indigo-50/70 text-indigo-700">
-          {IconComponent ? (
-            <IconComponent className="h-4 w-4" />
-          ) : (
+          {typeof icon === "string" ? (
             <span className="font-bold text-xs">{icon}</span>
+          ) : (
+            createElement(icon, { className: "h-4 w-4" })
           )}
         </div>
       </div>
