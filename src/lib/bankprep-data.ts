@@ -8,6 +8,7 @@ export type SavedPaper = {
   savedAt: number;
 };
 
+
 export type AttemptRecord = {
   id: string;
   paperId?: string;
@@ -21,7 +22,12 @@ export type AttemptRecord = {
   total: number;
   accuracy: number;
   durationSeconds: number;
+
+  // Additional activity statistics
+  speed?: number;
+  unanswered?: number;
 };
+
 
 export type UserProfile = {
   id: string;
