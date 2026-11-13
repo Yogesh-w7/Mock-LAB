@@ -1,3 +1,4 @@
+
 "use client";
 
 import {
@@ -70,6 +71,7 @@ const SAMPLE_KEY = `1-C
 3-C`;
 
 // --- Inline SVGs & Micro-Icons ---
+
 function IconArrowLeft({ className = "w-4 h-4" }: { className?: string }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -222,8 +224,27 @@ export default function ImporterPage() {
       setQuestions(selected.questions);
       setSavedId(selected.id);
 
+      // Convert saved question-number arrays into the editor's range format.
       if (selected.examConfig?.sections && Array.isArray(selected.examConfig.sections)) {
-        setFullMockSections(selected.examConfig.sections as ExamSectionConfig[]);
+        const restoredSections: ExamSectionConfig[] = selected.examConfig.sections.map(
+          (savedSection, index) => {
+            const questionNumbers = Array.isArray(savedSection.questionNumbers)
+              ? savedSection.questionNumbers.filter(Number.isFinite)
+              : [];
+
+            return {
+              key: savedSection.key || `section-${index + 1}`,
+              title: savedSection.title || `Section ${index + 1}`,
+              minutes: Math.max(1, Number(savedSection.minutes) || 20),
+              fromQ: questionNumbers.length ? Math.min(...questionNumbers) : 1,
+              toQ: questionNumbers.length ? Math.max(...questionNumbers) : 1,
+            };
+          }
+        );
+
+        if (restoredSections.length > 0) {
+          setFullMockSections(restoredSections);
+        }
       }
 
       setSaveNotice({ text: "Existing mock loaded successfully into the studio.", type: "success" });
@@ -460,6 +481,7 @@ export default function ImporterPage() {
 
   function buildRecord(id: string): SavedPaper {
     const isFull = section === "Full Mock Test";
+
     return {
       id,
       title: title.trim() || "Untitled Mock",
@@ -470,19 +492,25 @@ export default function ImporterPage() {
       answerKeyText: keyText,
       savedAt: Date.now(),
       examConfig: {
+        mode: isFull ? "full" : "sectional",
         marksPerQuestion: 1,
         negativeMarks: 0.25,
         sections: isFull
           ? fullMockSections.map((s) => ({
               key: s.key,
               title: s.title,
-              minutes: Number(s.minutes) || 20,
+              minutes: Math.max(1, Number(s.minutes) || 20),
               questionNumbers: Array.from(
-                { length: Math.max(0, s.toQ - s.fromQ + 1) },
-                (_, i) => s.fromQ + i
+                {
+                  length: Math.max(
+                    0,
+                    Math.floor(s.toQ) - Math.ceil(s.fromQ) + 1
+                  ),
+                },
+                (_, i) => Math.ceil(s.fromQ) + i
               ),
             }))
-          : undefined,
+          : [],
       },
     };
   }
@@ -491,9 +519,15 @@ export default function ImporterPage() {
     if (questions.length === 0) {
       throw new Error("Generate a question preview before saving.");
     }
+
     const existing = readSavedPapers();
     const record = buildRecord(id);
-    writeSavedPapers([record, ...existing.filter((saved) => saved.id !== id)]);
+
+    writeSavedPapers([
+      record,
+      ...existing.filter((saved) => saved.id !== id),
+    ]);
+
     setSavedId(id);
   }
 
@@ -501,7 +535,11 @@ export default function ImporterPage() {
     try {
       const id = savedId || crypto.randomUUID();
       persistPaper(id);
-      setSaveNotice({ text: "Mock test successfully saved to local storage.", type: "success" });
+
+      setSaveNotice({
+        text: "Mock test successfully saved to local storage.",
+        type: "success",
+      });
     } catch (error) {
       setSaveNotice({
         text: error instanceof Error ? error.message : "Could not save mock.",
