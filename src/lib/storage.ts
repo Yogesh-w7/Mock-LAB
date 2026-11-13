@@ -26,6 +26,8 @@ export type ExamSectionConfig = {
  */
 export type ExamConfig = {
   mode: "full" | "sectional";
+  marksPerQuestion?: number;
+  negativeMarks?: number;
   sections: ExamSectionConfig[];
 };
 
