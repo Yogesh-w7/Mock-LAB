@@ -401,124 +401,140 @@ export default function HomePage() {
     let mounted = true;
     const supabase = createClient();
 
-async function loadDashboard() {
-  if (!mounted) return;
+    async function loadDashboard() {
+      if (!mounted) return;
 
-  setPapersLoading(true);
-  setPapersError(null);
+      setPapersLoading(true);
+      setPapersError(null);
 
-  // Keep the existing local attempt history and candidate profile.
-  try {
-    setAttempts(readList<AttemptRecord>(ATTEMPTS_KEY));
-    setProfile(readProfile());
-  } catch (error) {
-    console.error("Could not load local dashboard data:", error);
-  }
-
-  try {
-    // Check whether a session exists before requesting the user.
-    const {
-      data: { session },
-      error: sessionError,
-    } = await supabase.auth.getSession();
-
-    if (sessionError) {
-      throw sessionError;
-    }
-
-    let user = null;
-
-    if (session?.user) {
-      const {
-        data: { user: authenticatedUser },
-        error: userError,
-      } = await supabase.auth.getUser();
-
-      if (userError) {
-        throw userError;
+      // Load local attempt history and profile.
+      try {
+        setAttempts(readList<AttemptRecord>(ATTEMPTS_KEY));
+        setProfile(readProfile());
+      } catch (error) {
+        console.error("Could not load local dashboard data:", error);
       }
 
-      user = authenticatedUser;
-    }
+      try {
+        // First check whether a session exists.
+        const {
+          data: { session },
+          error: sessionError,
+        } = await supabase.auth.getSession();
 
-    let isAdmin = false;
+        if (sessionError) {
+          throw sessionError;
+        }
 
-    if (user) {
-      const { data: userProfile, error: profileError } = await supabase
-        .from("profiles")
-        .select("role")
-        .eq("id", user.id)
-        .maybeSingle();
+        let user = null;
 
-      if (profileError) {
-        throw profileError;
+        // Only request the authenticated user when a session exists.
+        if (session?.user) {
+          const {
+            data: { user: authenticatedUser },
+            error: userError,
+          } = await supabase.auth.getUser();
+
+          if (userError) {
+            throw userError;
+          }
+
+          user = authenticatedUser;
+        }
+
+        let isAdmin = false;
+
+        // Check admin role only for authenticated users.
+        if (user) {
+          const {
+            data: userProfile,
+            error: profileError,
+          } = await supabase
+            .from("profiles")
+            .select("role")
+            .eq("id", user.id)
+            .maybeSingle();
+
+          if (profileError) {
+            throw profileError;
+          }
+
+          isAdmin = userProfile?.role === "admin";
+        }
+
+        // Admins can see all papers.
+        // Students and visitors can see published papers only.
+        let query = supabase
+          .from("papers")
+          .select(
+            "id, title, section, minutes, questions, created_at, is_published"
+          )
+          .order("created_at", { ascending: false });
+
+        if (!isAdmin) {
+          query = query.eq("is_published", true);
+        }
+
+        const { data, error } = await query;
+
+        if (error) {
+          throw error;
+        }
+
+        if (!mounted) return;
+
+        const normalizedPapers: SavedPaper[] = (data || []).map(
+          (paper) => ({
+            id: String(paper.id),
+            title: paper.title || "Untitled Paper",
+            section: paper.section || "General",
+            minutes: Number(paper.minutes) || 0,
+            questions: Array.isArray(paper.questions)
+              ? paper.questions
+              : [],
+            created_at: paper.created_at,
+            is_published: Boolean(paper.is_published),
+          })
+        );
+
+        setPapers(normalizedPapers);
+      } catch (error) {
+        console.error("Dashboard Supabase load failed:", error);
+
+        if (mounted) {
+          setPapers([]);
+
+          setPapersError(
+            error instanceof Error
+              ? error.message
+              : "Could not load papers from Supabase."
+          );
+        }
+      } finally {
+        if (mounted) {
+          setPapersLoading(false);
+        }
       }
-
-      isAdmin = userProfile?.role === "admin";
     }
-
-    // Admins can request all papers.
-    // Visitors and students can request published papers only.
-    let query = supabase
-      .from("papers")
-      .select(
-        "id, title, section, minutes, questions, created_at, is_published"
-      )
-      .order("created_at", { ascending: false });
-
-    if (!isAdmin) {
-      query = query.eq("is_published", true);
-    }
-
-    const { data, error } = await query;
-
-    if (error) {
-      throw error;
-    }
-
-    if (!mounted) return;
-
-    const normalizedPapers: SavedPaper[] = (data || []).map((paper) => ({
-      id: String(paper.id),
-      title: paper.title || "Untitled Paper",
-      section: paper.section || "General",
-      minutes: Number(paper.minutes) || 0,
-      questions: Array.isArray(paper.questions) ? paper.questions : [],
-      created_at: paper.created_at,
-      is_published: Boolean(paper.is_published),
-    }));
-
-    setPapers(normalizedPapers);
-  } catch (error) {
-    console.error("Dashboard Supabase load failed:", error);
-
-    if (mounted) {
-      setPapers([]);
-
-      setPapersError(
-        error instanceof Error
-          ? error.message
-          : "Could not load papers from Supabase."
-      );
-    }
-  } finally {
-    if (mounted) {
-      setPapersLoading(false);
-    }
-  }
-}
 
     void loadDashboard();
 
-    // Refresh dashboard when the user's authentication changes.
+    // Refresh after authentication changes.
+    // Defer Supabase requests until the auth callback has completed.
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(() => {
-      void loadDashboard();
+      window.setTimeout(() => {
+        if (mounted) {
+          void loadDashboard();
+        }
+      }, 0);
     });
 
-    // Attempt history and profile are still local.
+    // Refresh local data when the tab regains focus or storage changes.
     const reloadLocalData = () => {
+      if (!mounted) return;
+
       try {
         setAttempts(readList<AttemptRecord>(ATTEMPTS_KEY));
         setProfile(readProfile());
@@ -534,7 +550,9 @@ async function loadDashboard() {
 
     return () => {
       mounted = false;
+
       subscription.unsubscribe();
+
       window.removeEventListener("focus", reloadLocalData);
       window.removeEventListener("storage", reloadLocalData);
     };
@@ -955,53 +973,66 @@ function Shell({
   useEffect(() => {
     const supabase = createClient();
     let mounted = true;
-    
+
     async function checkUser() {
       try {
         const {
           data: { session },
           error: sessionError,
         } = await supabase.auth.getSession();
+
         if (!mounted) return;
+
+        // No active session means visitor mode.
         if (sessionError || !session?.user) {
           setLoggedIn(false);
           setIsAdmin(false);
           setAuthDisplayName(null);
           return;
-          
-          const {
-            data: { user },
-            error: userError,
-          } = await supabase.auth.getUser();
-          
-          if (!mounted) return;
-          
-          if (userError || !user) {
-            setLoggedIn(false);
-            setIsAdmin(false);
-            setAuthDisplayName(null);
-            return;
-          }
-          
-          setLoggedIn(true);
-          const metadataName =
-            user.user_metadata?.display_name ||
-            user.user_metadata?.full_name ||
-            null;
-          
-          setAuthDisplayName(metadataName);
-          const { data: userProfile, error: profileError } = await supabase
-            .from("profiles")
-            .select("role")
-            .eq("id", user.id)
-            .maybeSingle();
-          
-          if (!mounted) return;
-          
-          setIsAdmin(!profileError && userProfile?.role === "admin");
-        } catch (error) {
+        }
+
+        // A session exists, so now safely retrieve the user.
+        const {
+          data: { user },
+          error: userError,
+        } = await supabase.auth.getUser();
+
+        if (!mounted) return;
+
+        if (userError || !user) {
+          setLoggedIn(false);
+          setIsAdmin(false);
+          setAuthDisplayName(null);
+          return;
+        }
+
+        setLoggedIn(true);
+
+        const metadataName =
+          user.user_metadata?.display_name ||
+          user.user_metadata?.full_name ||
+          null;
+
+        setAuthDisplayName(metadataName);
+
+        // Retrieve the user's role.
+        const {
+          data: userProfile,
+          error: profileError,
+        } = await supabase
+          .from("profiles")
+          .select("role")
+          .eq("id", user.id)
+          .maybeSingle();
+
+        if (!mounted) return;
+
+        setIsAdmin(
+          !profileError && userProfile?.role === "admin"
+        );
+      } catch (error) {
         console.error("Authentication check failed:", error);
-        
+
         if (mounted) {
           setLoggedIn(false);
           setIsAdmin(false);
@@ -1014,12 +1045,18 @@ function Shell({
       }
     }
 
+    // Initial authentication check.
     void checkUser();
 
+    // Avoid making Supabase requests directly inside the auth callback.
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(() => {
-      void checkUser();
+      window.setTimeout(() => {
+        if (mounted) {
+          void checkUser();
+        }
+      }, 0);
     });
 
     return () => {
@@ -1035,9 +1072,12 @@ function Shell({
 
     try {
       const supabase = createClient();
+
       const { error } = await supabase.auth.signOut();
 
-      if (error) throw error;
+      if (error) {
+        throw error;
+      }
 
       window.location.href = "/";
     } catch (error) {
