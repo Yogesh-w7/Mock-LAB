@@ -452,37 +452,37 @@ export default function AdminPapersPage() {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<FilterType>("all");
   const [message, setMessage] = useState("");
-  const [messageType, setMessageType] = useState<"success" | "error">(
-    "success"
-  );
-
+  const [messageType, setMessageType] = useState<"success" | "error">("success");
   const [inspectPaper, setInspectPaper] = useState<PaperRow | null>(null);
 
-  // Legacy migration state
   const [legacyPaperCount, setLegacyPaperCount] = useState(0);
   const [legacyMigrationDone, setLegacyMigrationDone] = useState(false);
   const [migratingLegacy, setMigratingLegacy] = useState(false);
 
-  const notify = (
-    text: string,
-    type: "success" | "error" = "success"
-  ) => {
+  const notify = (text: string, type: "success" | "error" = "success") => {
     setMessage(text);
     setMessageType(type);
   };
 
   const loadPapers = useCallback(
     async (showRefresh = false) => {
-      if (showRefresh) {
-        setRefreshing(true);
-      } else {
-        setLoading(true);
-      }
+      if (showRefresh) setRefreshing(true);
+      else setLoading(true);
 
       setMessage("");
 
       try {
         const supabase = createClient();
+
+        const {
+          data: { session },
+          error: sessionError,
+        } = await supabase.auth.getSession();
+
+        if (sessionError || !session?.user) {
+          router.replace("/admin/login");
+          return;
+        }
 
         const {
           data: { user },
@@ -508,14 +508,10 @@ export default function AdminPapersPage() {
 
         const { data, error } = await supabase
           .from("papers")
-          .select(
-            "id, title, section, minutes, is_published, created_at, questions, paper_text, answer_key_text"
-          )
+          .select("id, title, section, minutes, is_published, created_at, questions")
           .order("created_at", { ascending: false });
 
-        if (error) {
-          throw error;
-        }
+        if (error) throw error;
 
         setPapers((data as PaperRow[] | null) ?? []);
       } catch (error) {
@@ -531,7 +527,6 @@ export default function AdminPapersPage() {
   useEffect(() => {
     void loadPapers();
 
-    // Detect legacy papers without migrating them automatically.
     try {
       setLegacyMigrationDone(
         localStorage.getItem(LEGACY_MIGRATION_MARKER) === "done"
@@ -544,9 +539,7 @@ export default function AdminPapersPage() {
   }, [loadPapers]);
 
   async function migrateLegacyPapers() {
-    if (migratingLegacy) {
-      return;
-    }
+    if (migratingLegacy) return;
 
     try {
       if (localStorage.getItem(LEGACY_MIGRATION_MARKER) === "done") {
@@ -573,9 +566,7 @@ export default function AdminPapersPage() {
       `Migrate up to ${legacyPapers.length} legacy paper(s) from this browser to Supabase as drafts? Existing Supabase papers will not be published or overwritten.`
     );
 
-    if (!confirmed) {
-      return;
-    }
+    if (!confirmed) return;
 
     setMigratingLegacy(true);
     setMessage("");
@@ -584,17 +575,25 @@ export default function AdminPapersPage() {
       const supabase = createClient();
 
       const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
+
+      if (sessionError || !session?.user) {
+        throw new Error(
+          "Your admin session is missing or expired. Please sign in again before migrating."
+        );
+      }
+
+      const {
         data: { user },
         error: authError,
       } = await supabase.auth.getUser();
 
-      if (authError) {
-        throw authError;
-      }
-
-      if (!user) {
+      if (authError || !user) {
         throw new Error(
-          "Please sign in using your administrator account before migrating."
+          authError?.message ||
+            "Could not verify your administrator session. Please sign in again."
         );
       }
 
@@ -604,9 +603,7 @@ export default function AdminPapersPage() {
         .eq("id", user.id)
         .maybeSingle();
 
-      if (profileError) {
-        throw profileError;
-      }
+      if (profileError) throw profileError;
 
       if (profile?.role !== "admin") {
         throw new Error("Only an administrator can migrate legacy papers.");
@@ -616,12 +613,8 @@ export default function AdminPapersPage() {
         .from("papers")
         .select("id, title, section, questions");
 
-      if (existingError) {
-        throw existingError;
-      }
+      if (existingError) throw existingError;
 
-      // This signature avoids re-importing papers with the same title,
-      // section and question count. Existing rows are never updated.
       const existingSignatures = new Set(
         (existingRows ?? []).map(
           (row: {
@@ -654,7 +647,6 @@ export default function AdminPapersPage() {
         );
 
         const questionCount = payload.questions.length;
-
         const signature = `${payload.title
           .trim()
           .toLowerCase()}|${payload.section
@@ -680,12 +672,8 @@ export default function AdminPapersPage() {
       }
 
       if (errors.length > 0) {
-        // Do not mark migration complete if any paper failed.
-        // The user can fix the issue and retry.
         notify(
-          `Migration partially completed: ${inserted} imported, ${skipped} matching paper(s) skipped. Fix these errors and retry: ${errors.join(
-            " | "
-          )}`,
+          `Migration partially completed: ${inserted} imported, ${skipped} matching paper(s) skipped. Fix these errors and retry: ${errors.join(" | ")}`,
           "error"
         );
       } else {
@@ -707,9 +695,7 @@ export default function AdminPapersPage() {
   }
 
   async function togglePublish(paper: PaperRow) {
-    if (busyId) {
-      return;
-    }
+    if (busyId) return;
 
     setBusyId(paper.id);
     setMessage("");
@@ -726,9 +712,7 @@ export default function AdminPapersPage() {
         })
         .eq("id", paper.id);
 
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
 
       setPapers((previous) =>
         previous.map((item) =>
@@ -759,17 +743,13 @@ export default function AdminPapersPage() {
   }
 
   async function removePaper(paper: PaperRow) {
-    if (busyId) {
-      return;
-    }
+    if (busyId) return;
 
     const confirmed = window.confirm(
       `Delete "${paper.title}" permanently?\n\nThis will remove the paper from the repository.`
     );
 
-    if (!confirmed) {
-      return;
-    }
+    if (!confirmed) return;
 
     setBusyId(paper.id);
     setMessage("");
@@ -782,9 +762,7 @@ export default function AdminPapersPage() {
         .delete()
         .eq("id", paper.id);
 
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
 
       setPapers((previous) =>
         previous.filter((item) => item.id !== paper.id)
@@ -807,9 +785,7 @@ export default function AdminPapersPage() {
       "Sign out of the administrator workspace?"
     );
 
-    if (!confirmed) {
-      return;
-    }
+    if (!confirmed) return;
 
     const supabase = createClient();
     const { error } = await supabase.auth.signOut();
