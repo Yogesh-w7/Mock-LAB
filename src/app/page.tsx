@@ -401,101 +401,112 @@ export default function HomePage() {
     let mounted = true;
     const supabase = createClient();
 
-    async function loadDashboard() {
-      if (!mounted) return;
+async function loadDashboard() {
+  if (!mounted) return;
 
-      setPapersLoading(true);
-      setPapersError(null);
+  setPapersLoading(true);
+  setPapersError(null);
 
-      // Keep the existing local attempt history and candidate profile.
-      try {
-        setAttempts(readList<AttemptRecord>(ATTEMPTS_KEY));
-        setProfile(readProfile());
-      } catch (error) {
-        console.error("Could not load local dashboard data:", error);
-      }
+  // Keep the existing local attempt history and candidate profile.
+  try {
+    setAttempts(readList<AttemptRecord>(ATTEMPTS_KEY));
+    setProfile(readProfile());
+  } catch (error) {
+    console.error("Could not load local dashboard data:", error);
+  }
 
-      try {
-        // Check the currently signed-in user.
-        const {
-          data: { user },
-          error: userError,
-        } = await supabase.auth.getUser();
+  try {
+    // Check whether a session exists before requesting the user.
+    const {
+      data: { session },
+      error: sessionError,
+    } = await supabase.auth.getSession();
 
-        if (userError) {
-          throw userError;
-        }
-
-        let isAdmin = false;
-
-        if (user) {
-          const { data: userProfile, error: profileError } =
-            await supabase
-              .from("profiles")
-              .select("role")
-              .eq("id", user.id)
-              .maybeSingle();
-
-          if (profileError) {
-            throw profileError;
-          }
-
-          isAdmin = userProfile?.role === "admin";
-        }
-
-        // Admins can request all papers.
-        // Students and signed-out visitors request published papers only.
-        let query = supabase
-          .from("papers")
-          .select(
-            "id, title, section, minutes, questions, created_at, is_published"
-          )
-          .order("created_at", { ascending: false });
-
-        if (!isAdmin) {
-          query = query.eq("is_published", true);
-        }
-
-        const { data, error } = await query;
-
-        if (error) {
-          throw error;
-        }
-
-        if (!mounted) return;
-
-        const normalizedPapers: SavedPaper[] = (data || []).map(
-          (paper) => ({
-            id: String(paper.id),
-            title: paper.title || "Untitled Paper",
-            section: paper.section || "General",
-            minutes: Number(paper.minutes) || 0,
-            questions: Array.isArray(paper.questions)
-              ? paper.questions
-              : [],
-            created_at: paper.created_at,
-            is_published: Boolean(paper.is_published),
-          })
-        );
-
-        setPapers(normalizedPapers);
-      } catch (error) {
-        console.error("Dashboard Supabase load failed:", error);
-
-        if (mounted) {
-          setPapers([]);
-          setPapersError(
-            error instanceof Error
-              ? error.message
-              : "Could not load papers from Supabase."
-          );
-        }
-      } finally {
-        if (mounted) {
-          setPapersLoading(false);
-        }
-      }
+    if (sessionError) {
+      throw sessionError;
     }
+
+    let user = null;
+
+    if (session?.user) {
+      const {
+        data: { user: authenticatedUser },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError) {
+        throw userError;
+      }
+
+      user = authenticatedUser;
+    }
+
+    let isAdmin = false;
+
+    if (user) {
+      const { data: userProfile, error: profileError } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      if (profileError) {
+        throw profileError;
+      }
+
+      isAdmin = userProfile?.role === "admin";
+    }
+
+    // Admins can request all papers.
+    // Visitors and students can request published papers only.
+    let query = supabase
+      .from("papers")
+      .select(
+        "id, title, section, minutes, questions, created_at, is_published"
+      )
+      .order("created_at", { ascending: false });
+
+    if (!isAdmin) {
+      query = query.eq("is_published", true);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      throw error;
+    }
+
+    if (!mounted) return;
+
+    const normalizedPapers: SavedPaper[] = (data || []).map((paper) => ({
+      id: String(paper.id),
+      title: paper.title || "Untitled Paper",
+      section: paper.section || "General",
+      minutes: Number(paper.minutes) || 0,
+      questions: Array.isArray(paper.questions) ? paper.questions : [],
+      created_at: paper.created_at,
+      is_published: Boolean(paper.is_published),
+    }));
+
+    setPapers(normalizedPapers);
+  } catch (error) {
+    console.error("Dashboard Supabase load failed:", error);
+
+    if (mounted) {
+      setPapers([]);
+
+      setPapersError(
+        error instanceof Error
+          ? error.message
+          : "Could not load papers from Supabase."
+      );
+    }
+  } finally {
+    if (mounted) {
+      setPapersLoading(false);
+    }
+  }
+}
 
     void loadDashboard();
 
@@ -944,47 +955,53 @@ function Shell({
   useEffect(() => {
     const supabase = createClient();
     let mounted = true;
-
+    
     async function checkUser() {
       try {
         const {
-          data: { user },
-          error: userError,
-        } = await supabase.auth.getUser();
-
+          data: { session },
+          error: sessionError,
+        } = await supabase.auth.getSession();
         if (!mounted) return;
-
-        if (userError || !user) {
+        if (sessionError || !session?.user) {
           setLoggedIn(false);
           setIsAdmin(false);
           setAuthDisplayName(null);
           return;
-        }
-
-        setLoggedIn(true);
-
-        const metadataName =
-          user.user_metadata?.display_name ||
-          user.user_metadata?.full_name ||
-          null;
-
-        setAuthDisplayName(metadataName);
-
-        const { data: userProfile, error: profileError } =
-          await supabase
+          
+          const {
+            data: { user },
+            error: userError,
+          } = await supabase.auth.getUser();
+          
+          if (!mounted) return;
+          
+          if (userError || !user) {
+            setLoggedIn(false);
+            setIsAdmin(false);
+            setAuthDisplayName(null);
+            return;
+          }
+          
+          setLoggedIn(true);
+          const metadataName =
+            user.user_metadata?.display_name ||
+            user.user_metadata?.full_name ||
+            null;
+          
+          setAuthDisplayName(metadataName);
+          const { data: userProfile, error: profileError } = await supabase
             .from("profiles")
             .select("role")
             .eq("id", user.id)
             .maybeSingle();
-
-        if (!mounted) return;
-
-        setIsAdmin(
-          !profileError && userProfile?.role === "admin"
-        );
-      } catch (error) {
+          
+          if (!mounted) return;
+          
+          setIsAdmin(!profileError && userProfile?.role === "admin");
+        } catch (error) {
         console.error("Authentication check failed:", error);
-
+        
         if (mounted) {
           setLoggedIn(false);
           setIsAdmin(false);
