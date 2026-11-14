@@ -51,15 +51,20 @@ function jsonError(message: string, status = 400) {
   );
 }
 
+/* -------------------------------------------------------
+   SUPABASE SERVER CLIENT
+------------------------------------------------------- */
+
 async function supabaseServer() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+
   const key =
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim() ||
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
 
   if (!url || !key) {
     throw new Error(
-      "Supabase configuration is missing. Set NEXT_PUBLIC_SUPABASE_URL and either NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY or NEXT_PUBLIC_SUPABASE_ANON_KEY in .env.local."
+      "Supabase configuration is missing. Set NEXT_PUBLIC_SUPABASE_URL and either NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY or NEXT_PUBLIC_SUPABASE_ANON_KEY."
     );
   }
 
@@ -82,25 +87,42 @@ async function supabaseServer() {
       getAll() {
         return cookieStore.getAll();
       },
+
       setAll(cookiesToSet) {
         try {
           cookiesToSet.forEach(({ name, value, options }) => {
             cookieStore.set(name, value, options);
           });
         } catch (error) {
-          console.error("Unable to persist Supabase session cookies:", error);
+          console.error(
+            "Unable to persist Supabase session cookies:",
+            error
+          );
         }
       },
     },
   });
 }
+
+/* -------------------------------------------------------
+   SUPABASE ADMIN CLIENT
+   Used only for private answer-key access.
+------------------------------------------------------- */
+
 async function supabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
 
-  if (!url || !serviceKey) {
+  const serviceKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() ||
+    process.env.SUPABASE_SECRET_KEY?.trim();
+
+  if (!url) {
+    throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL.");
+  }
+
+  if (!serviceKey) {
     throw new Error(
-      "Missing server-side Supabase configuration. Set SUPABASE_SERVICE_ROLE_KEY in your environment."
+      "Private answer-key access is not configured. Add SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_SECRET_KEY) to Vercel Environment Variables."
     );
   }
 
@@ -111,6 +133,11 @@ async function supabaseAdmin() {
     },
   });
 }
+
+/* -------------------------------------------------------
+   ANONYMOUS USER
+------------------------------------------------------- */
+
 async function getOrCreateAnonymousUser() {
   const supabase = await supabaseServer();
 
@@ -147,12 +174,24 @@ async function getOrCreateAnonymousUser() {
     );
   }
 
-  return { supabase, user: data.user };
+  return {
+    supabase,
+    user: data.user,
+  };
 }
 
+/* -------------------------------------------------------
+   ANSWER NORMALIZATION
+------------------------------------------------------- */
+
 function normalizeAnswer(value: unknown): OptionLetter | null {
-  if (typeof value === "number") value = String(value);
-  if (typeof value !== "string") return null;
+  if (typeof value === "number") {
+    value = String(value);
+  }
+
+  if (typeof value !== "string") {
+    return null;
+  }
 
   const normalized = value
     .trim()
@@ -165,14 +204,30 @@ function normalizeAnswer(value: unknown): OptionLetter | null {
     return normalized as OptionLetter;
   }
 
-  const match = normalized.match(/(?:ANSWER\s*[:=-]\s*)?([A-E])\b/);
+  const match = normalized.match(
+    /(?:ANSWER\s*[:=-]\s*)?([A-E])\b/
+  );
+
   return match ? (match[1] as OptionLetter) : null;
 }
 
-/** Parse answer_key_text formats: 1-c, 1. C, Q1: C, S1. Ans.(e) */
-function parseAnswerKeyText(text: string): Record<number, OptionLetter> {
+/* -------------------------------------------------------
+   PARSE ANSWER KEY TEXT
+   Supports:
+   1-C
+   1. C
+   Q1: C
+   S1. Ans.(E)
+------------------------------------------------------- */
+
+function parseAnswerKeyText(
+  text: string
+): Record<number, OptionLetter> {
   const result: Record<number, OptionLetter> = {};
-  if (!text?.trim()) return result;
+
+  if (!text?.trim()) {
+    return result;
+  }
 
   const patterns = [
     /(?:Q\s*)?(\d+)\s*[-.:)]\s*(?:Ans\.?\s*\(?\s*)?(?:OPTION\s*)?([A-Ea-e])\b/gi,
@@ -182,10 +237,13 @@ function parseAnswerKeyText(text: string): Record<number, OptionLetter> {
 
   for (const regex of patterns) {
     let match: RegExpExecArray | null;
+
     regex.lastIndex = 0;
+
     while ((match = regex.exec(text)) !== null) {
       const n = Number(match[1]);
       const letter = match[2].toUpperCase() as OptionLetter;
+
       if (Number.isFinite(n) && OPTION_LETTERS.includes(letter)) {
         result[n] = letter;
       }
@@ -195,12 +253,17 @@ function parseAnswerKeyText(text: string): Record<number, OptionLetter> {
   return result;
 }
 
+/* -------------------------------------------------------
+   RESOLVE QUESTION ANSWER
+------------------------------------------------------- */
+
 function resolveQuestionAnswer(
   question: PaperQuestion,
   index: number,
   keyFromText: Record<number, OptionLetter>
 ): OptionLetter | null {
   const qn = getQuestionNumber(question, index);
+
   return (
     normalizeAnswer(question.correctAnswer) ||
     normalizeAnswer(question.correct_answer) ||
@@ -212,7 +275,10 @@ function resolveQuestionAnswer(
   );
 }
 
-/** Live exam: strip answers */
+/* -------------------------------------------------------
+   REMOVE ANSWERS FROM LIVE EXAM QUESTIONS
+------------------------------------------------------- */
+
 function sanitizeQuestion(question: PaperQuestion) {
   const {
     correctAnswer: _c1,
@@ -229,19 +295,32 @@ function sanitizeQuestion(question: PaperQuestion) {
   return safeQuestion;
 }
 
-/** Review mode: keep correctAnswer only */
+/* -------------------------------------------------------
+   QUESTIONS FOR REVIEW
+------------------------------------------------------- */
+
 function questionForReview(
   question: PaperQuestion,
   index: number,
   keyFromText: Record<number, OptionLetter>
 ) {
   const safe = sanitizeQuestion(question);
-  const correctAnswer = resolveQuestionAnswer(question, index, keyFromText);
+
+  const correctAnswer = resolveQuestionAnswer(
+    question,
+    index,
+    keyFromText
+  );
+
   return {
     ...safe,
     correctAnswer,
   };
 }
+
+/* -------------------------------------------------------
+   GET EXAM SECTIONS
+------------------------------------------------------- */
 
 function getSections(
   config: JsonObject,
@@ -252,17 +331,34 @@ function getSections(
     sections?: unknown;
   }
 ): ExamSection[] {
-  // Prefer top-level sections jsonb from full-mock authoring
   const topSections = paper.sections;
+
   if (Array.isArray(topSections) && topSections.length > 0) {
     const mapped = topSections
       .map((section, idx) => {
-        if (!section || typeof section !== "object") return null;
+        if (!section || typeof section !== "object") {
+          return null;
+        }
+
         const s = section as JsonObject;
-        const title = String(s.name ?? s.title ?? `Section ${idx + 1}`);
-        const key = String(s.key ?? title.toLowerCase().replace(/\s+/g, "-"));
-        const minutes = Math.max(1, Number(s.minutes) || 20);
-        const qs = Array.isArray(s.questions) ? s.questions : [];
+
+        const title = String(
+          s.name ?? s.title ?? `Section ${idx + 1}`
+        );
+
+        const key = String(
+          s.key ?? title.toLowerCase().replace(/\s+/g, "-")
+        );
+
+        const minutes = Math.max(
+          1,
+          Number(s.minutes) || 20
+        );
+
+        const qs = Array.isArray(s.questions)
+          ? s.questions
+          : [];
+
         const questionNumbers = qs
           .map((q, i) =>
             typeof q === "object" && q
@@ -276,15 +372,20 @@ function getSections(
           title,
           minutes,
           questionNumbers:
-            questionNumbers.length > 0 ? questionNumbers : undefined,
+            questionNumbers.length > 0
+              ? questionNumbers
+              : undefined,
         } as ExamSection;
       })
       .filter((s): s is ExamSection => Boolean(s));
 
-    if (mapped.length) return mapped;
+    if (mapped.length) {
+      return mapped;
+    }
   }
 
   const configured = config.sections;
+
   if (Array.isArray(configured) && configured.length > 0) {
     const sections = configured
       .filter(
@@ -299,26 +400,46 @@ function getSections(
         title: section.title,
         minutes: Math.max(1, Number(section.minutes) || 1),
         questionNumbers: Array.isArray(section.questionNumbers)
-          ? section.questionNumbers.map(Number).filter(Number.isFinite)
+          ? section.questionNumbers
+              .map(Number)
+              .filter(Number.isFinite)
           : [],
       }));
 
-    if (sections.length > 0) return sections;
+    if (sections.length > 0) {
+      return sections;
+    }
   }
 
-  // Infer from question.section / sectionName
+  // Infer sections from question.section / sectionName.
+
   const bySection = new Map<string, number[]>();
+
   paper.questions.forEach((q, index) => {
-    const title = String(q.sectionName || q.section || paper.section || "General");
+    const title = String(
+      q.sectionName || q.section || paper.section || "General"
+    );
+
     const list = bySection.get(title) || [];
+
     list.push(getQuestionNumber(q, index));
+
     bySection.set(title, list);
   });
 
   if (bySection.size > 1) {
-    const totalMin = Math.max(1, Number(paper.minutes) || 60);
+    const totalMin = Math.max(
+      1,
+      Number(paper.minutes) || 60
+    );
+
     const names = Array.from(bySection.keys());
-    const per = Math.max(1, Math.floor(totalMin / names.length));
+
+    const per = Math.max(
+      1,
+      Math.floor(totalMin / names.length)
+    );
+
     return names.map((title, idx) => ({
       key: title.toLowerCase().replace(/\s+/g, "-"),
       title,
@@ -342,9 +463,20 @@ function getSections(
   ];
 }
 
-function getQuestionNumber(question: PaperQuestion, index: number): number {
+/* -------------------------------------------------------
+   QUESTION NUMBER
+------------------------------------------------------- */
+
+function getQuestionNumber(
+  question: PaperQuestion,
+  index: number
+): number {
   return Number(question.questionNumber) || index + 1;
 }
+
+/* -------------------------------------------------------
+   SELECT QUESTIONS
+------------------------------------------------------- */
 
 function selectQuestions(
   questions: PaperQuestion[],
@@ -357,29 +489,46 @@ function selectQuestions(
       (section) => section.questionNumbers || []
     );
 
-    if (!configuredNumbers.length) return questions;
+    if (!configuredNumbers.length) {
+      return questions;
+    }
 
     const byNumber = new Map<number, PaperQuestion>();
+
     questions.forEach((question, index) => {
-      byNumber.set(getQuestionNumber(question, index), question);
+      byNumber.set(
+        getQuestionNumber(question, index),
+        question
+      );
     });
 
     const ordered = sections.flatMap((section) =>
       (section.questionNumbers || [])
         .map((number) => byNumber.get(Number(number)))
-        .filter((question): question is PaperQuestion => Boolean(question))
+        .filter(
+          (question): question is PaperQuestion =>
+            Boolean(question)
+        )
     );
 
     return ordered.length ? ordered : questions;
   }
 
-  const section = sections.find((item) => item.key === sectionKey);
+  const section = sections.find(
+    (item) => item.key === sectionKey
+  );
+
   if (!section) {
-    throw new Error("The selected exam section does not exist.");
+    throw new Error(
+      "The selected exam section does not exist."
+    );
   }
 
   if (section.questionNumbers?.length) {
-    const allowed = new Set(section.questionNumbers.map(Number));
+    const allowed = new Set(
+      section.questionNumbers.map(Number)
+    );
+
     return questions.filter((question, index) =>
       allowed.has(getQuestionNumber(question, index))
     );
@@ -389,6 +538,7 @@ function selectQuestions(
     const value = String(
       question.sectionName || question.section || ""
     ).toLowerCase();
+
     return (
       value === section.title.toLowerCase() ||
       value === section.key.toLowerCase()
@@ -396,52 +546,92 @@ function selectQuestions(
   });
 }
 
+/* -------------------------------------------------------
+   EXAM DURATION
+------------------------------------------------------- */
+
 function durationForAttempt(
   sections: ExamSection[],
   mode: ExamMode,
   sectionKey?: string
 ) {
   if (mode === "sectional") {
-    const section = sections.find((item) => item.key === sectionKey);
+    const section = sections.find(
+      (item) => item.key === sectionKey
+    );
+
     if (!section) {
-      throw new Error("The selected exam section does not exist.");
+      throw new Error(
+        "The selected exam section does not exist."
+      );
     }
+
     return section.minutes * 60;
   }
-  return sections.reduce((sum, section) => sum + section.minutes, 0) * 60;
+
+  return (
+    sections.reduce(
+      (sum, section) => sum + section.minutes,
+      0
+    ) * 60
+  );
 }
+
+/* -------------------------------------------------------
+   BUILD CORRECT ANSWERS MAP
+------------------------------------------------------- */
 
 function buildCorrectAnswersMap(
   questions: PaperQuestion[],
   answerKeyText: string
 ): Record<string, OptionLetter> {
   const fromText = parseAnswerKeyText(answerKeyText);
+
   const map: Record<string, OptionLetter> = {};
 
   questions.forEach((q, index) => {
     const n = getQuestionNumber(q, index);
-    const letter = resolveQuestionAnswer(q, index, fromText);
-    if (letter) map[String(n)] = letter;
+
+    const letter = resolveQuestionAnswer(
+      q,
+      index,
+      fromText
+    );
+
+    if (letter) {
+      map[String(n)] = letter;
+    }
   });
 
   return map;
 }
+
+/* -------------------------------------------------------
+   ENRICH RESULT WITH ANSWERS
+------------------------------------------------------- */
 
 function enrichResultWithAnswers(
   result: unknown,
   questions: PaperQuestion[],
   answerKeyText: string
 ) {
-  const correctAnswers = buildCorrectAnswersMap(questions, answerKeyText);
+  const correctAnswers = buildCorrectAnswersMap(
+    questions,
+    answerKeyText
+  );
+
   const base =
-    result && typeof result === "object" ? (result as JsonObject) : {};
+    result && typeof result === "object"
+      ? (result as JsonObject)
+      : {};
 
   return {
     ...base,
     correctAnswers,
-    // Flat list for review UIs
+
     questions: questions.map((q, index) => {
       const qn = getQuestionNumber(q, index);
+
       return {
         questionNumber: qn,
         correctAnswer: correctAnswers[String(qn)] ?? null,
@@ -451,20 +641,32 @@ function enrichResultWithAnswers(
   };
 }
 
+/* -------------------------------------------------------
+   LOAD PUBLISHED PAPER
+   Answer key is optional.
+------------------------------------------------------- */
+
 async function loadPublishedPaper(
   supabase: Awaited<ReturnType<typeof supabaseServer>>,
-  id: string
+  id: string,
+  options: { includeAnswerKey?: boolean } = {}
 ) {
-  // Load only columns that exist in the papers table.
+  // Load only columns that exist in your papers table.
+
   const { data: paper, error } = await supabase
     .from("papers")
-    .select("id, title, section, minutes, questions, is_published")
+    .select(
+      "id, title, section, minutes, questions, is_published"
+    )
     .eq("id", id)
     .maybeSingle();
 
   if (error) {
     console.error("Supabase paper query failed:", error);
-    throw new Error(`Unable to load paper: ${error.message}`);
+
+    throw new Error(
+      `Unable to load paper: ${error.message}`
+    );
   }
 
   if (!paper) {
@@ -479,56 +681,70 @@ async function loadPublishedPaper(
     );
   }
 
-  // Questions are stored in papers.questions.
-  const questions: PaperQuestion[] = Array.isArray(paper.questions)
+  const questions: PaperQuestion[] = Array.isArray(
+    paper.questions
+  )
     ? (paper.questions as PaperQuestion[])
     : [];
 
   if (questions.length === 0) {
-    throw new Error("This paper does not contain any questions.");
+    throw new Error(
+      "This paper does not contain any questions."
+    );
   }
 
-  // Answer keys are stored separately in paper_answer_keys.
-  // Use the server-only service-role client to access this private table.
-  const adminSupabase = await supabaseAdmin();
+  // Important:
+  // Do not access the private answer-key table when starting
+  // or displaying a live exam.
 
-  const { data: answerKeyRow, error: answerKeyError } =
-    await adminSupabase
+  let answerKeyText = "";
+
+  if (options.includeAnswerKey) {
+    const adminSupabase = await supabaseAdmin();
+
+    const {
+      data: answerKeyRow,
+      error: answerKeyError,
+    } = await adminSupabase
       .from("paper_answer_keys")
       .select("answer_key_text, answers")
       .eq("paper_id", id)
       .maybeSingle();
 
-  if (answerKeyError) {
-    console.error("Private answer key query failed:", answerKeyError);
-    throw new Error(
-      `Unable to load the private answer key: ${answerKeyError.message}`
-    );
+    if (answerKeyError) {
+      console.error(
+        "Private answer key query failed:",
+        answerKeyError
+      );
+
+      throw new Error(
+        `Unable to load the private answer key: ${answerKeyError.message}`
+      );
+    }
+
+    const storedAnswers =
+      answerKeyRow?.answers &&
+      typeof answerKeyRow.answers === "object" &&
+      !Array.isArray(answerKeyRow.answers)
+        ? (answerKeyRow.answers as Record<string, unknown>)
+        : {};
+
+    const generatedAnswerKey = Object.entries(storedAnswers)
+      .map(
+        ([number, answer]) =>
+          `${number}. ${String(answer)}`
+      )
+      .join("\n");
+
+    answerKeyText =
+      (typeof answerKeyRow?.answer_key_text === "string" &&
+      answerKeyRow.answer_key_text.trim()
+        ? answerKeyRow.answer_key_text
+        : generatedAnswerKey) || "";
   }
-
-  // Prefer the original answer-key text.
-  // Fall back to the answers JSON saved by savePaper().
-  const storedAnswers =
-    answerKeyRow?.answers &&
-    typeof answerKeyRow.answers === "object" &&
-    !Array.isArray(answerKeyRow.answers)
-      ? (answerKeyRow.answers as Record<string, unknown>)
-      : {};
-
-  const generatedAnswerKey = Object.entries(storedAnswers)
-    .map(([number, answer]) => `${number}. ${String(answer)}`)
-    .join("\n");
-
-  const answerKeyText =
-    (typeof answerKeyRow?.answer_key_text === "string" &&
-    answerKeyRow.answer_key_text.trim()
-      ? answerKeyRow.answer_key_text
-      : generatedAnswerKey) || "";
 
   const config: JsonObject = {};
 
-  // Build sections from question.section / sectionName
-  // or fall back to the paper's main section.
   const sections = getSections(config, {
     section: paper.section || null,
     minutes: paper.minutes || null,
@@ -553,22 +769,38 @@ async function loadPublishedPaper(
     },
   };
 }
-// GET /api/exams/[id]
-// GET /api/exams/[id]?attemptId=UUID
-// GET /api/exams/[id]?attemptId=UUID&review=1  → include answer keys if attempt closed
+
+/* =======================================================
+   GET EXAM
+   GET /api/exams/[id]
+   GET /api/exams/[id]?attemptId=UUID
+   GET /api/exams/[id]?attemptId=UUID&review=1
+======================================================= */
+
 export async function GET(
   request: NextRequest,
-  context: { params: Promise<{ id: string }> | { id: string } }
+  context: {
+    params: Promise<{ id: string }> | { id: string };
+  }
 ) {
   try {
     const { id } = await context.params;
-    if (!id) return jsonError("A paper ID is required.", 400);
 
-    const { supabase, user } = await getOrCreateAnonymousUser();
-    const loaded = await loadPublishedPaper(supabase, id);
+    if (!id) {
+      return jsonError("A paper ID is required.", 400);
+    }
 
-    const attemptId = request.nextUrl.searchParams.get("attemptId");
-    const reviewFlag = request.nextUrl.searchParams.get("review") === "1";
+    const { supabase, user } =
+      await getOrCreateAnonymousUser();
+
+    let loaded = await loadPublishedPaper(supabase, id);
+
+    const attemptId =
+      request.nextUrl.searchParams.get("attemptId");
+
+    const reviewFlag =
+      request.nextUrl.searchParams.get("review") === "1";
+
     let attempt = null;
     let allowKeys = false;
 
@@ -583,12 +815,17 @@ export async function GET(
 
       if (error) {
         console.error("Attempt restore failed:", error);
-        return jsonError(`Unable to restore attempt: ${error.message}`, 500);
+
+        return jsonError(
+          `Unable to restore attempt: ${error.message}`,
+          500
+        );
       }
 
       attempt = data;
 
-      // Keys only after attempt is graded/closed
+      // Answer keys are available only after the attempt is closed.
+
       if (
         attempt &&
         (attempt.status === "submitted" ||
@@ -600,20 +837,32 @@ export async function GET(
       }
     }
 
-    // Explicit review mode also requires a closed attempt owned by this user
+    // Review mode must still belong to this user
+    // and must be a completed attempt.
+
     if (reviewFlag && attemptId && allowKeys) {
       allowKeys = true;
     } else if (reviewFlag && !allowKeys) {
-      // Do not leak keys just because review=1 without a finished attempt
       allowKeys = false;
     }
 
-    const keyFromText = parseAnswerKeyText(loaded.answerKeyText);
+    // Load private answer key only when allowed.
+
+    if (allowKeys) {
+      loaded = await loadPublishedPaper(supabase, id, {
+        includeAnswerKey: true,
+      });
+    }
+
+    const keyFromText = parseAnswerKeyText(
+      loaded.answerKeyText
+    );
 
     const paperPayload = allowKeys
       ? {
           ...loaded.safePaper,
           answer_key_text: loaded.answerKeyText,
+
           questions: loaded.questions.map((q, i) =>
             questionForReview(q, i, keyFromText)
           ),
@@ -634,47 +883,80 @@ export async function GET(
     }
 
     return NextResponse.json(responseBody, {
-      headers: { "Cache-Control": "no-store, max-age=0" },
+      headers: {
+        "Cache-Control": "no-store, max-age=0",
+      },
     });
   } catch (error) {
     console.error("Exam GET error:", error);
+
     return jsonError(
-      error instanceof Error ? error.message : "Could not load exam.",
+      error instanceof Error
+        ? error.message
+        : "Could not load exam.",
       500
     );
   }
 }
 
-// POST /api/exams/[id]
-// Actions: start | save | submit | result
+/* =======================================================
+   POST EXAM
+   Actions: start | save | submit | result
+======================================================= */
+
 export async function POST(
   request: NextRequest,
-  context: { params: Promise<{ id: string }> | { id: string } }
+  context: {
+    params: Promise<{ id: string }> | { id: string };
+  }
 ) {
   try {
     const { id } = await context.params;
-    if (!id) return jsonError("A paper ID is required.", 400);
 
-    const { supabase, user } = await getOrCreateAnonymousUser();
+    if (!id) {
+      return jsonError("A paper ID is required.", 400);
+    }
+
+    const { supabase, user } =
+      await getOrCreateAnonymousUser();
 
     let body: JsonObject;
+
     try {
       body = (await request.json()) as JsonObject;
     } catch {
-      return jsonError("Request body must contain valid JSON.", 400);
+      return jsonError(
+        "Request body must contain valid JSON.",
+        400
+      );
     }
 
     const action = String(body.action || "");
 
+    /* ---------------------------------------------------
+       START EXAM
+    --------------------------------------------------- */
+
     if (action === "start") {
       const mode: ExamMode =
-        body.mode === "sectional" ? "sectional" : "full";
-      const sectionKey =
-        typeof body.sectionKey === "string" ? body.sectionKey : undefined;
+        body.mode === "sectional"
+          ? "sectional"
+          : "full";
 
-      const loaded = await loadPublishedPaper(supabase, id);
+      const sectionKey =
+        typeof body.sectionKey === "string"
+          ? body.sectionKey
+          : undefined;
+
+      // This does not require the service-role key.
+
+      const loaded = await loadPublishedPaper(
+        supabase,
+        id
+      );
 
       let selectedQuestions: PaperQuestion[];
+
       try {
         selectedQuestions = selectQuestions(
           loaded.questions,
@@ -684,7 +966,9 @@ export async function POST(
         );
       } catch (error) {
         return jsonError(
-          error instanceof Error ? error.message : "Invalid exam section.",
+          error instanceof Error
+            ? error.message
+            : "Invalid exam section.",
           400
         );
       }
@@ -703,14 +987,25 @@ export async function POST(
       );
 
       const start = new Date();
-      const end = new Date(start.getTime() + durationSeconds * 1000);
+
+      const end = new Date(
+        start.getTime() + durationSeconds * 1000
+      );
+
       const activeSection =
-        mode === "sectional" ? sectionKey : loaded.sections[0]?.key;
+        mode === "sectional"
+          ? sectionKey
+          : loaded.sections[0]?.key;
+
       const firstSection = loaded.sections.find(
         (section) => section.key === activeSection
       );
+
       const sectionDeadline = firstSection
-        ? new Date(start.getTime() + firstSection.minutes * 60_000)
+        ? new Date(
+            start.getTime() +
+              firstSection.minutes * 60_000
+          )
         : end;
 
       const { data: attempt, error } = await supabase
@@ -719,12 +1014,14 @@ export async function POST(
           user_id: user.id,
           paper_id: id,
           mode,
-          section_key: mode === "sectional" ? sectionKey : null,
+          section_key:
+            mode === "sectional" ? sectionKey : null,
           status: "in_progress",
           started_at: start.toISOString(),
           ends_at: end.toISOString(),
           active_section: activeSection,
-          section_deadline_at: sectionDeadline.toISOString(),
+          section_deadline_at:
+            sectionDeadline.toISOString(),
           current_index: 0,
           answers: {},
           marked_questions: [],
@@ -733,24 +1030,50 @@ export async function POST(
         .single();
 
       if (error) {
-        console.error("Could not create exam attempt:", error);
-        return jsonError(`Could not start exam: ${error.message}`, 500);
+        console.error(
+          "Could not create exam attempt:",
+          error
+        );
+
+        return jsonError(
+          `Could not start exam: ${error.message}`,
+          500
+        );
       }
 
       return NextResponse.json(
-        { attempt, durationSeconds },
-        { headers: { "Cache-Control": "no-store" } }
+        {
+          attempt,
+          durationSeconds,
+        },
+        {
+          headers: {
+            "Cache-Control": "no-store",
+          },
+        }
       );
     }
 
+    /* ---------------------------------------------------
+       GET ATTEMPT ID
+    --------------------------------------------------- */
+
     const attemptId =
-      typeof body.attemptId === "string" ? body.attemptId : "";
+      typeof body.attemptId === "string"
+        ? body.attemptId
+        : "";
 
     if (!attemptId) {
-      return jsonError("Attempt ID is required.", 400);
+      return jsonError(
+        "Attempt ID is required.",
+        400
+      );
     }
 
-    const { data: attempt, error: attemptError } = await supabase
+    const {
+      data: attempt,
+      error: attemptError,
+    } = await supabase
       .from("exam_attempts")
       .select("*")
       .eq("id", attemptId)
@@ -759,7 +1082,11 @@ export async function POST(
       .maybeSingle();
 
     if (attemptError) {
-      console.error("Attempt lookup failed:", attemptError);
+      console.error(
+        "Attempt lookup failed:",
+        attemptError
+      );
+
       return jsonError(
         `Could not retrieve exam attempt: ${attemptError.message}`,
         500
@@ -773,13 +1100,29 @@ export async function POST(
       );
     }
 
-    // ── result: return grade + correct answers for review ───────────────
+    /* ---------------------------------------------------
+       RESULT
+    --------------------------------------------------- */
+
     if (action === "result") {
-      if (attempt.status === "in_progress" && !attempt.result) {
-        return jsonError("Attempt is still in progress.", 409);
+      if (
+        attempt.status === "in_progress" &&
+        !attempt.result
+      ) {
+        return jsonError(
+          "Attempt is still in progress.",
+          409
+        );
       }
 
-      const loaded = await loadPublishedPaper(supabase, id);
+      const loaded = await loadPublishedPaper(
+        supabase,
+        id,
+        {
+          includeAnswerKey: true,
+        }
+      );
+
       const enriched = enrichResultWithAnswers(
         attempt.result || {},
         loaded.questions,
@@ -789,6 +1132,7 @@ export async function POST(
       return NextResponse.json(
         {
           result: enriched,
+
           paper: {
             id: loaded.safePaper.id,
             title: loaded.safePaper.title,
@@ -796,22 +1140,40 @@ export async function POST(
             minutes: loaded.safePaper.minutes,
             sections: loaded.safePaper.sections,
             answer_key_text: loaded.answerKeyText,
+
             questions: loaded.questions.map((q, i) =>
               questionForReview(
                 q,
                 i,
-                parseAnswerKeyText(loaded.answerKeyText)
+                parseAnswerKeyText(
+                  loaded.answerKeyText
+                )
               )
             ),
           },
         },
-        { headers: { "Cache-Control": "no-store" } }
+        {
+          headers: {
+            "Cache-Control": "no-store",
+          },
+        }
       );
     }
 
+    /* ---------------------------------------------------
+       CHECK ATTEMPT STATUS
+    --------------------------------------------------- */
+
     if (attempt.status !== "in_progress") {
       if (attempt.result) {
-        const loaded = await loadPublishedPaper(supabase, id);
+        const loaded = await loadPublishedPaper(
+          supabase,
+          id,
+          {
+            includeAnswerKey: true,
+          }
+        );
+
         return NextResponse.json({
           result: enrichResultWithAnswers(
             attempt.result,
@@ -820,29 +1182,53 @@ export async function POST(
           ),
         });
       }
-      return jsonError("This attempt is already closed.", 409);
+
+      return jsonError(
+        "This attempt is already closed.",
+        409
+      );
     }
 
-    const expired = Date.now() >= new Date(attempt.ends_at).getTime();
+    const expired =
+      Date.now() >= new Date(attempt.ends_at).getTime();
+
+    /* ---------------------------------------------------
+       SAVE EXAM PROGRESS
+    --------------------------------------------------- */
 
     if (action === "save") {
       if (expired) {
-        const { data: result, error } = await supabase.rpc(
-          "grade_exam_attempt",
-          { p_attempt_id: attemptId }
-        );
+        const { data: result, error } =
+          await supabase.rpc(
+            "grade_exam_attempt",
+            {
+              p_attempt_id: attemptId,
+            }
+          );
 
         if (error) {
-          console.error("Automatic grading failed:", error);
+          console.error(
+            "Automatic grading failed:",
+            error
+          );
+
           return jsonError(
             `Could not submit expired test: ${error.message}`,
             500
           );
         }
 
-        const loaded = await loadPublishedPaper(supabase, id);
+        const loaded = await loadPublishedPaper(
+          supabase,
+          id,
+          {
+            includeAnswerKey: true,
+          }
+        );
+
         return NextResponse.json({
           submitted: true,
+
           result: enrichResultWithAnswers(
             result,
             loaded.questions,
@@ -858,10 +1244,15 @@ export async function POST(
           ? body.answers
           : {};
 
-      const markedQuestions = Array.isArray(body.markedQuestions)
+      const markedQuestions = Array.isArray(
+        body.markedQuestions
+      )
         ? body.markedQuestions
             .map(Number)
-            .filter((value) => Number.isInteger(value) && value >= 1)
+            .filter(
+              (value) =>
+                Number.isInteger(value) && value >= 1
+            )
         : [];
 
       const currentIndex = Math.max(
@@ -882,31 +1273,55 @@ export async function POST(
         .eq("status", "in_progress");
 
       if (updateError) {
-        console.error("Saving exam progress failed:", updateError);
+        console.error(
+          "Saving exam progress failed:",
+          updateError
+        );
+
         return jsonError(
           `Could not save your answers: ${updateError.message}`,
           500
         );
       }
 
-      return NextResponse.json({ saved: true });
+      return NextResponse.json({
+        saved: true,
+      });
     }
 
+    /* ---------------------------------------------------
+       SUBMIT EXAM
+    --------------------------------------------------- */
+
     if (action === "submit") {
-      const { data: result, error } = await supabase.rpc(
-        "grade_exam_attempt",
-        { p_attempt_id: attemptId }
-      );
+      const { data: result, error } =
+        await supabase.rpc(
+          "grade_exam_attempt",
+          {
+            p_attempt_id: attemptId,
+          }
+        );
 
       if (error) {
-        console.error("Exam grading failed:", error);
+        console.error(
+          "Exam grading failed:",
+          error
+        );
+
         return jsonError(
           `Could not grade your exam: ${error.message}`,
           500
         );
       }
 
-      const loaded = await loadPublishedPaper(supabase, id);
+      const loaded = await loadPublishedPaper(
+        supabase,
+        id,
+        {
+          includeAnswerKey: true,
+        }
+      );
+
       const enriched = enrichResultWithAnswers(
         result,
         loaded.questions,
@@ -914,16 +1329,28 @@ export async function POST(
       );
 
       return NextResponse.json(
-        { result: enriched },
-        { headers: { "Cache-Control": "no-store" } }
+        {
+          result: enriched,
+        },
+        {
+          headers: {
+            "Cache-Control": "no-store",
+          },
+        }
       );
     }
 
-    return jsonError("Unsupported exam action.", 400);
+    return jsonError(
+      "Unsupported exam action.",
+      400
+    );
   } catch (error) {
     console.error("Exam POST error:", error);
+
     return jsonError(
-      error instanceof Error ? error.message : "Exam request failed.",
+      error instanceof Error
+        ? error.message
+        : "Exam request failed.",
       500
     );
   }
