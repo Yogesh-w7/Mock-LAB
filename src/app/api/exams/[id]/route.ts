@@ -1,3 +1,4 @@
+import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
@@ -93,7 +94,23 @@ async function supabaseServer() {
     },
   });
 }
+async function supabaseAdmin() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
 
+  if (!url || !serviceKey) {
+    throw new Error(
+      "Missing server-side Supabase configuration. Set SUPABASE_SERVICE_ROLE_KEY in your environment."
+    );
+  }
+
+  return createSupabaseClient(url, serviceKey, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  });
+}
 async function getOrCreateAnonymousUser() {
   const supabase = await supabaseServer();
 
@@ -438,37 +455,12 @@ async function loadPublishedPaper(
   supabase: Awaited<ReturnType<typeof supabaseServer>>,
   id: string
 ) {
-  // Include answer_key_text + sections when present (ignore if columns missing via fallback)
-  let paper: JsonObject | null = null;
-  let error: { message: string } | null = null;
-
-  const fullSelect =
-    "id, title, section, minutes, questions, exam_config, is_published, answer_key_text, paper_text, sections, is_sectional";
-
-  const primary = await supabase
+  // Load only columns that exist in the papers table.
+  const { data: paper, error } = await supabase
     .from("papers")
-    .select(fullSelect)
+    .select("id, title, section, minutes, questions, is_published")
     .eq("id", id)
     .maybeSingle();
-
-  if (
-    primary.error &&
-    (primary.error.message?.includes("answer_key_text") ||
-      primary.error.message?.includes("sections") ||
-      primary.error.message?.includes("is_sectional") ||
-      primary.error.message?.includes("paper_text"))
-  ) {
-    const fallback = await supabase
-      .from("papers")
-      .select("id, title, section, minutes, questions, exam_config, is_published")
-      .eq("id", id)
-      .maybeSingle();
-    paper = fallback.data as JsonObject | null;
-    error = fallback.error;
-  } else {
-    paper = primary.data as JsonObject | null;
-    error = primary.error;
-  }
 
   if (error) {
     console.error("Supabase paper query failed:", error);
@@ -477,7 +469,7 @@ async function loadPublishedPaper(
 
   if (!paper) {
     throw new Error(
-      "Paper not found. Verify the paper ID and the database access policies."
+      "Paper not found. Verify the paper ID and database access policies."
     );
   }
 
@@ -487,49 +479,60 @@ async function loadPublishedPaper(
     );
   }
 
+  // Questions are stored in papers.questions.
   const questions: PaperQuestion[] = Array.isArray(paper.questions)
     ? (paper.questions as PaperQuestion[])
     : [];
 
-  // Flatten questions stored only inside sections jsonb
-  if (
-    questions.length === 0 &&
-    Array.isArray(paper.sections) &&
-    paper.sections.length > 0
-  ) {
-    let n = 1;
-    for (const sec of paper.sections) {
-      if (!sec || typeof sec !== "object") continue;
-      const s = sec as JsonObject;
-      const secQs = Array.isArray(s.questions) ? s.questions : [];
-      for (const q of secQs) {
-        if (!q || typeof q !== "object") continue;
-        questions.push({
-          ...(q as PaperQuestion),
-          questionNumber:
-            Number((q as PaperQuestion).questionNumber) || n,
-          sectionName: String(
-            (q as PaperQuestion).sectionName ||
-              s.name ||
-              s.title ||
-              "Section"
-          ),
-        });
-        n++;
-      }
-    }
+  if (questions.length === 0) {
+    throw new Error("This paper does not contain any questions.");
   }
 
-  const config = (paper.exam_config || {}) as JsonObject;
-  const answerKeyText = String(
-    paper.answer_key_text ?? paper.answerKeyText ?? ""
-  );
+  // Answer keys are stored separately in paper_answer_keys.
+  // Use the server-only service-role client to access this private table.
+  const adminSupabase = await supabaseAdmin();
 
+  const { data: answerKeyRow, error: answerKeyError } =
+    await adminSupabase
+      .from("paper_answer_keys")
+      .select("answer_key_text, answers")
+      .eq("paper_id", id)
+      .maybeSingle();
+
+  if (answerKeyError) {
+    console.error("Private answer key query failed:", answerKeyError);
+    throw new Error(
+      `Unable to load the private answer key: ${answerKeyError.message}`
+    );
+  }
+
+  // Prefer the original answer-key text.
+  // Fall back to the answers JSON saved by savePaper().
+  const storedAnswers =
+    answerKeyRow?.answers &&
+    typeof answerKeyRow.answers === "object" &&
+    !Array.isArray(answerKeyRow.answers)
+      ? (answerKeyRow.answers as Record<string, unknown>)
+      : {};
+
+  const generatedAnswerKey = Object.entries(storedAnswers)
+    .map(([number, answer]) => `${number}. ${String(answer)}`)
+    .join("\n");
+
+  const answerKeyText =
+    (typeof answerKeyRow?.answer_key_text === "string" &&
+    answerKeyRow.answer_key_text.trim()
+      ? answerKeyRow.answer_key_text
+      : generatedAnswerKey) || "";
+
+  const config: JsonObject = {};
+
+  // Build sections from question.section / sectionName
+  // or fall back to the paper's main section.
   const sections = getSections(config, {
-    section: (paper.section as string) || null,
-    minutes: (paper.minutes as number) || null,
+    section: paper.section || null,
+    minutes: paper.minutes || null,
     questions,
-    sections: paper.sections,
   });
 
   return {
@@ -537,6 +540,7 @@ async function loadPublishedPaper(
     sections,
     answerKeyText,
     paperRow: paper,
+
     safePaper: {
       id: paper.id,
       title: paper.title,
@@ -544,12 +548,11 @@ async function loadPublishedPaper(
       minutes: paper.minutes,
       examConfig: config,
       sections,
-      is_sectional: Boolean(paper.is_sectional) || sections.length > 1,
+      is_sectional: sections.length > 1,
       questions: questions.map(sanitizeQuestion),
     },
   };
 }
-
 // GET /api/exams/[id]
 // GET /api/exams/[id]?attemptId=UUID
 // GET /api/exams/[id]?attemptId=UUID&review=1  → include answer keys if attempt closed
