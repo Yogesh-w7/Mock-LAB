@@ -32,7 +32,9 @@ export type SavePaperInput = {
 };
 
 // Verify that the current user is an administrator.
-async function requireAdmin(supabase: ReturnType<typeof createClient>) {
+async function requireAdmin(
+  supabase: ReturnType<typeof createClient>
+) {
   const {
     data: { user },
     error: authError,
@@ -67,8 +69,6 @@ async function requireAdmin(supabase: ReturnType<typeof createClient>) {
 }
 
 // Get all published papers.
-// This function can be used by public visitors,
-// provided the papers SELECT RLS policy allows it.
 export async function listPublishedPapers() {
   const supabase = createClient();
 
@@ -129,6 +129,12 @@ export async function savePaper(input: SavePaperInput) {
     );
   }
 
+  if (!input.answerKeyText.trim()) {
+    throw new Error(
+      "Import or enter the answer key before saving the paper."
+    );
+  }
+
   // Never put correctAnswer in publicly readable questions JSON.
   const publicQuestions: PublicQuestion[] =
     input.questions.map((q) => ({
@@ -137,16 +143,6 @@ export async function savePaper(input: SavePaperInput) {
       question: q.question,
       options: q.options,
     }));
-
-  // Keep correct answers in the private answer-key table.
-  const answers: Record<string, string> = {};
-
-  for (const q of input.questions) {
-    if (q.correctAnswer) {
-      answers[String(q.questionNumber)] =
-        q.correctAnswer;
-    }
-  }
 
   const paperPayload = {
     title: input.title.trim(),
@@ -197,6 +193,9 @@ export async function savePaper(input: SavePaperInput) {
   }
 
   // Save private answer key separately.
+  // Do not insert "answers" because that column
+  // does not exist in your current table.
+
   const { error: answerError } = await supabase
     .from("paper_answer_keys")
     .upsert(
@@ -204,7 +203,6 @@ export async function savePaper(input: SavePaperInput) {
         paper_id: paperId,
         paper_text: input.paperText,
         answer_key_text: input.answerKeyText,
-        answers,
         updated_at: new Date().toISOString(),
       },
       {
@@ -213,6 +211,11 @@ export async function savePaper(input: SavePaperInput) {
     );
 
   if (answerError) {
+    console.error(
+      "Private answer key save failed:",
+      answerError
+    );
+
     throw new Error(
       `Paper metadata saved, but saving the private answer key failed: ${answerError.message}`
     );
