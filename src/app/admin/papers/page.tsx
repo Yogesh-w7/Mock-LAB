@@ -100,21 +100,34 @@ function normalizeLegacyPaper(
     ? paper.questions
     : [];
 
+  // Keep correct answers out of the public papers.questions JSON.
+  // The answer key is stored separately in paper_answer_keys.
+  const publicQuestions = questions.map((question) => {
+    const {
+      correctAnswer: _correctAnswer,
+      answer: _answer,
+      ...publicQuestion
+    } = question as ParsedQuestion & Record<string, unknown>;
+
+    return publicQuestion;
+  });
+
+  const answerKeyText = String(
+    paper.answer_key_text ??
+      paper.answerKeyText ??
+      paper.answerKey ??
+      ""
+  ).trim();
+
   return {
     title: title || `Imported legacy paper ${index + 1}`,
     section: section || "Full Mock Test",
     minutes,
-    questions,
-    paper_text: String(
+    questions: publicQuestions,
+    paperText: String(
       paper.paper_text ?? paper.paperText ?? paper.rawText ?? ""
     ),
-    answer_key_text: String(
-      paper.answer_key_text ??
-        paper.answerKeyText ??
-        paper.answerKey ??
-        ""
-    ),
-
+    answerKeyText,
     // Old papers are imported as drafts.
     // They are never published automatically.
     is_published: false,
@@ -658,12 +671,57 @@ export default function AdminPapersPage() {
           continue;
         }
 
+        if (questionCount === 0) {
+          errors.push(`${payload.title}: no parsed questions were found.`);
+          continue;
+        }
+
+        if (!payload.answerKeyText) {
+          errors.push(
+            `${payload.title}: answer key is missing. The paper was not imported so it cannot produce a valid result/review.`
+          );
+          continue;
+        }
+
+        // Public paper record: question content only, never the answer key.
+        // Generate the UUID in the browser so this insert does not depend on
+        // PostgREST returning a selected row after INSERT.
+        const paperId = crypto.randomUUID();
+
         const { error: insertError } = await supabase
           .from("papers")
-          .insert(payload);
+          .insert({
+            id: paperId,
+            title: payload.title,
+            section: payload.section,
+            minutes: payload.minutes,
+            questions: payload.questions,
+            is_published: false,
+            created_by: user.id,
+          });
 
         if (insertError) {
           errors.push(`${payload.title}: ${insertError.message}`);
+          continue;
+        }
+
+        // Private answer-key storage expected by /api/exams/[id].
+        const { error: keyError } = await supabase
+          .from("paper_answer_keys")
+          .upsert(
+            {
+              paper_id: paperId,
+              paper_text: payload.paperText,
+              answer_key_text: payload.answerKeyText,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "paper_id" }
+          );
+
+        if (keyError) {
+          // Roll back the public paper if its private key could not be saved.
+          await supabase.from("papers").delete().eq("id", paperId);
+          errors.push(`${payload.title}: answer key save failed — ${keyError.message}`);
           continue;
         }
 
