@@ -123,7 +123,7 @@ export async function savePaper(input: SavePaperInput) {
     throw new Error("Import at least one question.");
   }
 
-  // Keep the correct answers out of the public questions table.
+  // Keep correct answers out of public questions.
   const publicQuestions: PublicQuestion[] =
     input.questions.map((q) => ({
       id: String(q.id),
@@ -133,20 +133,26 @@ export async function savePaper(input: SavePaperInput) {
     }));
 
   // Use the original answer-key text when available.
-  // Otherwise, generate it from the matched question answers.
+  // Otherwise, generate it from matched question answers.
+  const generatedAnswerKey = input.questions
+    .flatMap((q) => {
+      const answer = q.correctAnswer;
+
+      if (
+        typeof answer !== "string" ||
+        answer.trim().length === 0
+      ) {
+        return [];
+      }
+
+      return [
+        `${q.questionNumber}. ${answer.trim()}`
+      ];
+    })
+    .join("\n");
+
   const effectiveAnswerKeyText =
-    input.answerKeyText?.trim() ||
-    input.questions
-      .filter(
-        (q) =>
-          typeof q.correctAnswer === "string" &&
-          q.correctAnswer.trim().length > 0
-      )
-      .map(
-        (q) =>
-          `${q.questionNumber}. ${q.correctAnswer.trim()}`
-      )
-      .join("\n");
+    input.answerKeyText?.trim() || generatedAnswerKey;
 
   // Do not save a paper without a usable answer key.
   if (!effectiveAnswerKeyText.trim()) {
