@@ -41,9 +41,7 @@ async function requireAdmin(
   } = await supabase.auth.getUser();
 
   if (authError || !user) {
-    throw new Error(
-      "Please sign in as an administrator."
-    );
+    throw new Error("Please sign in as an administrator.");
   }
 
   const { data: profile, error: profileError } =
@@ -60,9 +58,7 @@ async function requireAdmin(
   }
 
   if (profile?.role !== "admin") {
-    throw new Error(
-      "Administrator access required."
-    );
+    throw new Error("Administrator access required.");
   }
 
   return user;
@@ -117,25 +113,17 @@ export async function savePaper(input: SavePaperInput) {
 
   const user = await requireAdmin(supabase);
 
+  // Validate title.
   if (!input.title.trim()) {
-    throw new Error(
-      "Enter a title for the paper."
-    );
+    throw new Error("Enter a title for the paper.");
   }
 
+  // Validate questions.
   if (!input.questions.length) {
-    throw new Error(
-      "Import at least one question."
-    );
+    throw new Error("Import at least one question.");
   }
 
-  if (!input.answerKeyText.trim()) {
-    throw new Error(
-      "Import or enter the answer key before saving the paper."
-    );
-  }
-
-  // Never put correctAnswer in publicly readable questions JSON.
+  // Keep the correct answers out of the public questions table.
   const publicQuestions: PublicQuestion[] =
     input.questions.map((q) => ({
       id: String(q.id),
@@ -144,6 +132,30 @@ export async function savePaper(input: SavePaperInput) {
       options: q.options,
     }));
 
+  // Use the original answer-key text when available.
+  // Otherwise, generate it from the matched question answers.
+  const effectiveAnswerKeyText =
+    input.answerKeyText?.trim() ||
+    input.questions
+      .filter(
+        (q) =>
+          typeof q.correctAnswer === "string" &&
+          q.correctAnswer.trim().length > 0
+      )
+      .map(
+        (q) =>
+          `${q.questionNumber}. ${q.correctAnswer.trim()}`
+      )
+      .join("\n");
+
+  // Do not save a paper without a usable answer key.
+  if (!effectiveAnswerKeyText.trim()) {
+    throw new Error(
+      "No correct answers found. Import the answer key and verify the question-answer matching before saving."
+    );
+  }
+
+  // Prepare public paper data.
   const paperPayload = {
     title: input.title.trim(),
     section: input.section,
@@ -192,17 +204,15 @@ export async function savePaper(input: SavePaperInput) {
     paperId = data.id;
   }
 
-  // Save private answer key separately.
-  // Do not insert "answers" because that column
-  // does not exist in your current table.
-
+  // Save the private answer key separately.
+  // Do not include the nonexistent "answers" column.
   const { error: answerError } = await supabase
     .from("paper_answer_keys")
     .upsert(
       {
         paper_id: paperId,
-        paper_text: input.paperText,
-        answer_key_text: input.answerKeyText,
+        paper_text: input.paperText ?? "",
+        answer_key_text: effectiveAnswerKeyText,
         updated_at: new Date().toISOString(),
       },
       {
