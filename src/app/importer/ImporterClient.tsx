@@ -558,11 +558,29 @@ export default function ImporterPage() {
       title: title.trim() || "Untitled Mock",
       section,
       minutes,
-      questions,
+      // The parser/storage type permits missing option values, while the
+      // Supabase paper writer expects all five option keys to be strings.
+      // Normalize only the server payload; keep the local editor data intact.
+      questions: questions.map((question) => ({
+        ...question,
+        options: {
+          A: question.options?.A ?? "",
+          B: question.options?.B ?? "",
+          C: question.options?.C ?? "",
+          D: question.options?.D ?? "",
+          E: question.options?.E ?? "",
+        },
+      })),
       paperText: paper,
       answerKeyText: keyText,
       publish: true,
     });
+
+    // savePaper may return null when the server cannot provide an ID.
+    // Do not persist or navigate with an invalid paper identifier.
+    if (!paperId) {
+      throw new Error("The paper was saved without a valid ID. Please try again.");
+    }
 
     setServerPaperId(paperId);
 
