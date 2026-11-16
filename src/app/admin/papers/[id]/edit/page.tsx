@@ -114,11 +114,17 @@ export default function AdminEditPaperPage() {
   // Quick single-option editor
   const [editingOption, setEditingOption] = useState<SingleOptionEditState>(null);
 
-  useEffect(() => {
+    useEffect(() => {
     async function loadPaper() {
-      if (!paperId) return;
+      if (!paperId) {
+        setError("Paper ID is missing.");
+        setLoading(false);
+        return;
+      }
+
       try {
         const supabase = createClient();
+
         const { data, error: fetchErr } = await supabase
           .from("papers")
           .select("*")
@@ -126,17 +132,42 @@ export default function AdminEditPaperPage() {
           .single();
 
         if (fetchErr) throw fetchErr;
-        if (data) {
-          setTitle(data.title || "");
-          setSection(data.section || "Quantitative Aptitude");
-          setMinutes(data.minutes || 20);
-          setPaper(data.paper_text || "");
-          setKeyText(data.answer_key_text || "");
-          setIsPublished(Boolean(data.is_published));
+        if (!data) throw new Error("Paper not found.");
 
-          if (Array.isArray(data.questions) && data.questions.length > 0) {
-            setEditableQuestions(data.questions as EditableQuestion[]);
-          }
+        // Load private raw text and answer key from the separate table.
+        const { data: privateData, error: privateError } = await supabase
+          .from("paper_answer_keys")
+          .select("paper_text,answer_key_text")
+          .eq("paper_id", paperId)
+          .maybeSingle();
+
+        if (privateError) {
+          throw new Error(
+            `Could not load the private answer key: ${privateError.message}`
+          );
+        }
+
+        setTitle(data.title || "");
+        setSection(data.section || "Quantitative Aptitude");
+        setMinutes(data.minutes || 20);
+
+        // Legacy fallback supports papers created before the tables were separated.
+        setPaper(
+          privateData?.paper_text ||
+            (typeof data.paper_text === "string" ? data.paper_text : "")
+        );
+
+        setKeyText(
+          privateData?.answer_key_text ||
+            (typeof data.answer_key_text === "string" ? data.answer_key_text : "")
+        );
+
+        setIsPublished(Boolean(data.is_published));
+
+        if (Array.isArray(data.questions) && data.questions.length > 0) {
+          setEditableQuestions(data.questions as EditableQuestion[]);
+        } else {
+          setEditableQuestions([]);
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unable to load paper.");
@@ -144,9 +175,9 @@ export default function AdminEditPaperPage() {
         setLoading(false);
       }
     }
+
     void loadPaper();
   }, [paperId]);
-
   function handleReparse() {
     if (!paper.trim()) {
       setError("Paper text cannot be empty.");
@@ -274,9 +305,16 @@ export default function AdminEditPaperPage() {
     setEditingQuestion(null);
   }
 
-  async function handleUpdate(publish: boolean) {
+    async function handleUpdate(publish: boolean) {
+    if (!paperId) {
+      setError("Paper ID is missing.");
+      return;
+    }
+
     if (!editableQuestions.length) {
-      setError("Cannot save: No questions available. Click 'Re-parse Questions' or check raw text.");
+      setError(
+        "Cannot save: No questions available. Click 'Re-parse Questions' or check raw text."
+      );
       return;
     }
 
@@ -286,15 +324,64 @@ export default function AdminEditPaperPage() {
 
     try {
       const supabase = createClient();
+
+      // Remove correct answers from the public questions data.
+      const publicQuestions = editableQuestions.map((question) => {
+        const source = question as EditableQuestion & { answer?: unknown };
+
+        const {
+          correctAnswer: _correctAnswer,
+          answer: _answer,
+          ...publicQuestion
+        } = source;
+
+        return publicQuestion;
+      });
+
+      // Generate the private answer key from the currently edited questions.
+      const generatedAnswerKey = editableQuestions
+        .map((question, index) => {
+          const answer = String(question.correctAnswer ?? "")
+            .trim()
+            .toUpperCase();
+
+          const questionNumber = question.questionNumber || index + 1;
+
+          return answer ? `${questionNumber}-${answer}` : "";
+        })
+        .filter(Boolean)
+        .join("\n");
+
+      // Preserve manually entered key text if no answers are set in the editor.
+      const finalAnswerKey = generatedAnswerKey || keyText.trim();
+
+      // Save raw paper and answer key in the private table.
+      const { error: privateSaveError } = await supabase
+        .from("paper_answer_keys")
+        .upsert(
+          {
+            paper_id: paperId,
+            paper_text: paper,
+            answer_key_text: finalAnswerKey,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "paper_id" }
+        );
+
+      if (privateSaveError) {
+        throw new Error(
+          `Could not save the private answer key: ${privateSaveError.message}`
+        );
+      }
+
+      // Save only public question information in papers.
       const { error: updateError } = await supabase
         .from("papers")
         .update({
           title: title.trim() || "Untitled Mock",
           section,
           minutes: Math.max(1, minutes),
-          questions: editableQuestions,
-          paper_text: paper,
-          answer_key_text: keyText,
+          questions: publicQuestions,
           is_published: publish,
           updated_at: new Date().toISOString(),
         })
@@ -302,8 +389,15 @@ export default function AdminEditPaperPage() {
 
       if (updateError) throw updateError;
 
+      setKeyText(finalAnswerKey);
       setIsPublished(publish);
-      setSuccess(publish ? "Paper published successfully!" : "Draft updated successfully!");
+
+      setSuccess(
+        publish
+          ? "Paper published successfully!"
+          : "Draft updated successfully!"
+      );
+
       setTimeout(() => {
         router.push("/admin/papers");
         router.refresh();
@@ -314,7 +408,6 @@ export default function AdminEditPaperPage() {
       setSavingMode(null);
     }
   }
-
   if (loading) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-slate-50">
