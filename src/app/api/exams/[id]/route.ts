@@ -646,12 +646,13 @@ function enrichResultWithAnswers(
    Answer key is optional.
 ------------------------------------------------------- */
 
+
 async function loadPublishedPaper(
   supabase: Awaited<ReturnType<typeof supabaseServer>>,
   id: string,
   options: { includeAnswerKey?: boolean } = {}
 ) {
-  // Load only columns that exist in your papers table.
+  // Load published paper.
 
   const { data: paper, error } = await supabase
     .from("papers")
@@ -681,6 +682,8 @@ async function loadPublishedPaper(
     );
   }
 
+  // Load questions.
+
   const questions: PaperQuestion[] = Array.isArray(
     paper.questions
   )
@@ -693,9 +696,8 @@ async function loadPublishedPaper(
     );
   }
 
-  // Important:
-  // Do not access the private answer-key table when starting
-  // or displaying a live exam.
+  // Load private answer key only for result/review.
+  // Your table has answer_key_text, not answers.
 
   let answerKeyText = "";
 
@@ -707,7 +709,7 @@ async function loadPublishedPaper(
       error: answerKeyError,
     } = await adminSupabase
       .from("paper_answer_keys")
-      .select("answer_key_text, answers")
+      .select("answer_key_text")
       .eq("paper_id", id)
       .maybeSingle();
 
@@ -722,26 +724,19 @@ async function loadPublishedPaper(
       );
     }
 
-    const storedAnswers =
-      answerKeyRow?.answers &&
-      typeof answerKeyRow.answers === "object" &&
-      !Array.isArray(answerKeyRow.answers)
-        ? (answerKeyRow.answers as Record<string, unknown>)
-        : {};
-
-    const generatedAnswerKey = Object.entries(storedAnswers)
-      .map(
-        ([number, answer]) =>
-          `${number}. ${String(answer)}`
-      )
-      .join("\n");
-
     answerKeyText =
-      (typeof answerKeyRow?.answer_key_text === "string" &&
-      answerKeyRow.answer_key_text.trim()
+      typeof answerKeyRow?.answer_key_text === "string"
         ? answerKeyRow.answer_key_text
-        : generatedAnswerKey) || "";
+        : "";
+
+    if (!answerKeyText.trim()) {
+      throw new Error(
+        "Answer key is empty or missing for this paper. Check the imported answer key."
+      );
+    }
   }
+
+  // Build sections.
 
   const config: JsonObject = {};
 
