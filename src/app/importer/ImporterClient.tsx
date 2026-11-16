@@ -19,9 +19,7 @@ import {
   type SavedPaper,
 } from "@/lib/storage";
 import { formatInlineMath } from "@/lib/format-inline-math";
-import {
-  savePaper as savePaperToSupabase,
-} from "@/lib/supabase/papers";
+import { savePaper as savePaperToSupabase } from "@/lib/supabase/papers";
 
 type ExamSectionConfig = {
   key: string;
@@ -217,8 +215,8 @@ export default function ImporterPage() {
     }
   }, [section, fullMockSections]);
 
-  // Keep the remaining existing component code below this point.
-}
+  // IMPORTANT: Do not close ImporterPage here.
+  // All remaining hooks, handlers and JSX must stay inside this component.
 
   useEffect(() => {
     if (!editId) return;
@@ -546,93 +544,88 @@ export default function ImporterPage() {
     setSavedId(id);
   }
 
-  
-async function savePaperToServer(): Promise<string> {
-  if (!questions.length) {
-    throw new Error("Generate a question preview before saving.");
-  }
+  async function savePaperToServer(): Promise<string> {
+    if (!questions.length) {
+      throw new Error("Generate a question preview before saving.");
+    }
 
-  if (!keyText.trim() && !questions.some((q) => q.correctAnswer)) {
-    throw new Error("Import the answer key before saving.");
-  }
+    if (!keyText.trim() && !questions.some((q) => q.correctAnswer)) {
+      throw new Error("Import the answer key before saving.");
+    }
 
-  const paperId = await savePaperToSupabase({
-    id: serverPaperId ?? undefined,
-    title: title.trim() || "Untitled Mock",
-    section,
-    minutes,
-    questions,
-    paperText: paper,
-    answerKeyText: keyText,
-    publish: true,
-  });
-
-  setServerPaperId(paperId);
-
-  // Keep local storage functionality as well.
-  persistPaper(paperId);
-
-  return paperId;
-}
-
-
-
-async function savePaper() {
-  setBusy(true);
-
-  try {
-    const id = await savePaperToServer();
-
-    setSaveNotice({
-      text: "Paper and private answer key saved successfully to Supabase.",
-      type: "success",
+    const paperId = await savePaperToSupabase({
+      id: serverPaperId ?? undefined,
+      title: title.trim() || "Untitled Mock",
+      section,
+      minutes,
+      questions,
+      paperText: paper,
+      answerKeyText: keyText,
+      publish: true,
     });
-  } catch (error) {
-    console.error("Paper save failed:", error);
 
-    setSaveNotice({
-      text:
-        error instanceof Error
-          ? error.message
-          : "Could not save paper to Supabase.",
-      type: "error",
-    });
-  } finally {
-    setBusy(false);
-  }
-}
+    setServerPaperId(paperId);
 
+    // Keep local storage functionality as well.
+    persistPaper(paperId);
 
-  
-async function startExam() {
-  if (questions.length === 0) {
-    setSaveNotice({
-      text: "Please generate a preview before launching the exam.",
-      type: "error",
-    });
-    return;
+    return paperId;
   }
 
-  setBusy(true);
+  async function savePaper() {
+    setBusy(true);
 
-  try {
-    const id = await savePaperToServer();
+    try {
+      await savePaperToServer();
 
-    router.push(`/exam/${id}`);
-  } catch (error) {
-    console.error("Exam launch failed:", error);
+      setSaveNotice({
+        text: "Paper and private answer key saved successfully to Supabase.",
+        type: "success",
+      });
+    } catch (error) {
+      console.error("Paper save failed:", error);
 
-    setSaveNotice({
-      text:
-        error instanceof Error
-          ? error.message
-          : "Could not save or start the test.",
-      type: "error",
-    });
-  } finally {
-    setBusy(false);
+      setSaveNotice({
+        text:
+          error instanceof Error
+            ? error.message
+            : "Could not save paper to Supabase.",
+        type: "error",
+      });
+    } finally {
+      setBusy(false);
+    }
   }
-}
+
+  async function startExam() {
+    if (questions.length === 0) {
+      setSaveNotice({
+        text: "Please generate a preview before launching the exam.",
+        type: "error",
+      });
+      return;
+    }
+
+    setBusy(true);
+
+    try {
+      const id = await savePaperToServer();
+
+      router.push(`/exam/${id}`);
+    } catch (error) {
+      console.error("Exam launch failed:", error);
+
+      setSaveNotice({
+        text:
+          error instanceof Error
+            ? error.message
+            : "Could not save or start the test.",
+        type: "error",
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const matchedAnswers = questions.filter((q) => Boolean(q.correctAnswer)).length;
 
