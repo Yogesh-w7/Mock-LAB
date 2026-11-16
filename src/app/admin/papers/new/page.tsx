@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useMemo, useState } from "react";
@@ -226,21 +227,34 @@ export default function AdminNewPaperPage() {
   // Full-mock preview diagnostics
   const fullPreview = useMemo(() => {
     if (paperMode !== "full") return null;
+
     let totalQ = 0;
     let totalAns = 0;
-    const perSection: { name: string; count: number; answers: number; minutes: number }[] = [];
+    const perSection: {
+      name: string;
+      count: number;
+      answers: number;
+      minutes: number;
+    }[] = [];
 
     for (const s of sections) {
       if (!s.paperText.trim()) {
-        perSection.push({ name: s.name, count: 0, answers: 0, minutes: s.minutes });
+        perSection.push({
+          name: s.name,
+          count: 0,
+          answers: 0,
+          minutes: s.minutes,
+        });
         continue;
       }
+
       try {
         const parsed = parsePaper(s.paperText, s.keyText, s.name);
         const count = parsed.questions.length;
         const answers = parsed.questions.filter((q) => q.correctAnswer).length;
         totalQ += count;
         totalAns += answers;
+
         perSection.push({
           name: s.name,
           count,
@@ -248,7 +262,12 @@ export default function AdminNewPaperPage() {
           minutes: s.minutes,
         });
       } catch {
-        perSection.push({ name: s.name, count: 0, answers: 0, minutes: s.minutes });
+        perSection.push({
+          name: s.name,
+          count: 0,
+          answers: 0,
+          minutes: s.minutes,
+        });
       }
     }
 
@@ -263,9 +282,11 @@ export default function AdminNewPaperPage() {
   function applyTemplate(templateId: string) {
     const t = EXAM_TEMPLATES.find((x) => x.id === templateId);
     if (!t) return;
+
     const next = t.sections.map((s) =>
       newSection({ name: s.name, minutes: s.minutes })
     );
+
     setSections(next);
     setActiveSectionId(next[0]?.id ?? null);
   }
@@ -278,9 +299,12 @@ export default function AdminNewPaperPage() {
       });
       return;
     }
+
     const used = new Set(sections.map((s) => s.name));
     const nextName =
-      SECTION_PRESETS.find((p) => !used.has(p)) ?? `Section ${sections.length + 1}`;
+      SECTION_PRESETS.find((p) => !used.has(p)) ??
+      `Section ${sections.length + 1}`;
+
     const s = newSection({ name: nextName, minutes: 20 });
     setSections((prev) => [...prev, s]);
     setActiveSectionId(s.id);
@@ -289,9 +313,11 @@ export default function AdminNewPaperPage() {
   function removeSection(idToRemove: string) {
     setSections((prev) => {
       const next = prev.filter((s) => s.id !== idToRemove);
+
       if (activeSectionId === idToRemove) {
         setActiveSectionId(next[0]?.id ?? null);
       }
+
       return next;
     });
   }
@@ -302,15 +328,61 @@ export default function AdminNewPaperPage() {
     );
   }
 
+  // ---------------------------------------------------------------------------
+  // SAVE PAPER
+  // Public questions go to papers.
+  // Private answer-key material goes to paper_answer_keys.
+  // ---------------------------------------------------------------------------
+
   async function handleSave(publish: boolean) {
     setNotice(null);
+    setSavingMode(publish ? "publish" : "draft");
 
     try {
+      type ParsedQuestionRow = {
+        questionNumber?: number;
+        correctAnswer?: string | null;
+        answer?: string | null;
+        [key: string]: unknown;
+      };
+
+      // Remove answer properties before saving questions in the public table.
+      const stripAnswerFields = (items: unknown[]) =>
+        items.map((item) => {
+          const question = item as ParsedQuestionRow;
+
+          const {
+            correctAnswer: _correctAnswer,
+            answer: _answer,
+            ...publicQuestion
+          } = question;
+
+          return publicQuestion;
+        });
+
+      // Fallback answer-key generator using parser output.
+      const buildAnswerKey = (items: unknown[]) =>
+        (items as ParsedQuestionRow[])
+          .map((question, index) => {
+            const answer = String(
+              question.correctAnswer ?? question.answer ?? ""
+            )
+              .trim()
+              .toUpperCase();
+
+            return answer
+              ? `${question.questionNumber ?? index + 1}-${answer}`
+              : "";
+          })
+          .filter(Boolean)
+          .join("\n");
+
       let questions: unknown[] = [];
       let paper_text = "";
       let answer_key_text = "";
       let finalSection = section;
       let finalMinutes = Math.max(1, minutes);
+
       const sectionsPayload: {
         name: string;
         minutes: number;
@@ -319,44 +391,56 @@ export default function AdminNewPaperPage() {
         answer_key_text: string;
       }[] = [];
 
+      // SINGLE SECTION
       if (paperMode === "single") {
         const parsed = parsePaper(paper, keyText, section);
+
         if (!parsed.questions.length) {
           setNotice({
             type: "error",
-            message: "No valid questions detected. Verify that items start with Q1., 1. and have option choices.",
+            message:
+              "No valid questions detected. Verify that items start with Q1., 1. and have option choices.",
           });
+          setSavingMode(null);
           return;
         }
+
         questions = parsed.questions;
         paper_text = paper;
-        answer_key_text = keyText;
+        answer_key_text = keyText.trim() || buildAnswerKey(parsed.questions);
         finalSection = section;
         finalMinutes = Math.max(1, minutes);
       } else {
+        // FULL MOCK
         if (!sections.length) {
           setNotice({
             type: "error",
             message: "Add at least one section before saving this full mock.",
           });
+          setSavingMode(null);
           return;
         }
 
         let globalOffset = 0;
+
         for (const s of sections) {
           if (!s.paperText.trim()) {
             setNotice({
               type: "error",
               message: `Section "${s.name}" is missing question text. Provide content or remove this section.`,
             });
+            setSavingMode(null);
             return;
           }
+
           const parsed = parsePaper(s.paperText, s.keyText, s.name);
+
           if (!parsed.questions.length) {
             setNotice({
               type: "error",
               message: `Could not parse questions in section "${s.name}". Check question prefixes and option markers.`,
             });
+            setSavingMode(null);
             return;
           }
 
@@ -366,6 +450,10 @@ export default function AdminNewPaperPage() {
             sectionName: s.name,
             section: s.name,
           }));
+
+          const sectionAnswerKey =
+            s.keyText.trim() || buildAnswerKey(renumbered);
+
           globalOffset += renumbered.length;
 
           sectionsPayload.push({
@@ -373,98 +461,168 @@ export default function AdminNewPaperPage() {
             minutes: Math.max(1, s.minutes || 1),
             questions: renumbered,
             paper_text: s.paperText,
-            answer_key_text: s.keyText,
+            answer_key_text: sectionAnswerKey,
           });
+
           questions = [...questions, ...renumbered];
         }
 
         paper_text = sections
-          .map((s) => `=== ${s.name} (${s.minutes} min) ===\n${s.paperText}`)
+          .map(
+            (s) =>
+              `=== ${s.name} (${s.minutes} min) ===\n${s.paperText}`
+          )
           .join("\n\n");
-        answer_key_text = sections
-          .map((s) => `=== ${s.name} ===\n${s.keyText}`)
+
+        answer_key_text = sectionsPayload
+          .map(
+            (s) => `=== ${s.name} ===\n${s.answer_key_text}`
+          )
           .join("\n\n");
+
         finalSection = "Full Mock Test";
+
         finalMinutes = sections.reduce(
           (sum, s) => sum + Math.max(1, s.minutes || 1),
           0
         );
       }
 
-      setSavingMode(publish ? "publish" : "draft");
+      if (!answer_key_text.trim()) {
+        setNotice({
+          type: "error",
+          message:
+            "Answer key is empty. Add an answer key before saving or publishing this paper.",
+        });
+        setSavingMode(null);
+        return;
+      }
 
       const supabase = createClient();
+
       const {
         data: { user },
+        error: userError,
       } = await supabase.auth.getUser();
 
+      if (userError || !user) {
+        throw new Error(
+          "Your admin session has expired. Please sign in again."
+        );
+      }
+
+      const { data: profile, error: profileError } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      if (profileError) throw profileError;
+
+      if (profile?.role !== "admin") {
+        throw new Error(
+          "Only an administrator can create examination papers."
+        );
+      }
+
+      // Do not expose correct answers in the public papers table.
+      const publicQuestions = stripAnswerFields(questions);
+
+      // Section metadata is retained, but section answer keys are excluded.
+      const publicSections = sectionsPayload.map((item) => ({
+        name: item.name,
+        minutes: item.minutes,
+        questions: stripAnswerFields(item.questions),
+      }));
+
+      // Generate ID client-side to avoid requiring INSERT ... SELECT.
+      const paperId = crypto.randomUUID();
+
       const payload: Record<string, unknown> = {
+        id: paperId,
         title: title.trim() || "Untitled Mock",
         section: finalSection,
         minutes: finalMinutes,
-        questions,
-        paper_text,
-        answer_key_text,
+        questions: publicQuestions,
         is_published: publish,
-        created_by: user?.id ?? null,
+        created_by: user.id,
         exam_config: {
           marksPerQuestion: 1,
           negativeMarks: 0.25,
           sections:
             paperMode === "full"
               ? sectionsPayload.map((s) => ({
-                  key: s.name.toLowerCase().replace(/[^a-z0-9]+/g, "_"),
+                  key: s.name
+                    .toLowerCase()
+                    .replace(/[^a-z0-9]+/g, "_"),
                   title: s.name,
                   minutes: s.minutes,
-                  questionNumbers: (s.questions as { questionNumber: number }[]).map(
-                    (q) => q.questionNumber
-                  ),
+                  questionNumbers: (
+                    s.questions as { questionNumber: number }[]
+                  ).map((q) => q.questionNumber),
                 }))
               : undefined,
         },
       };
 
       if (paperMode === "full") {
-        payload.sections = sectionsPayload;
+        payload.sections = publicSections;
         payload.is_sectional = true;
       }
 
-      const { error } = await supabase
+      // Insert public paper.
+      let { error: insertError } = await supabase
         .from("papers")
-        .insert(payload)
-        .select("id")
-        .single();
+        .insert(payload);
 
-      if (error) {
-        // Safe fallback if relational json columns are not present
-        if (
-          error.message?.includes("sections") ||
-          error.message?.includes("is_sectional")
-        ) {
-          delete payload.sections;
-          delete payload.is_sectional;
-          const retry = await supabase
-            .from("papers")
-            .insert(payload)
-            .select("id")
-            .single();
+      // Compatibility fallback for installations without optional columns.
+      if (
+        insertError &&
+        (insertError.message?.includes("sections") ||
+          insertError.message?.includes("is_sectional"))
+      ) {
+        const fallbackPayload = { ...payload };
+        delete fallbackPayload.sections;
+        delete fallbackPayload.is_sectional;
 
-          if (retry.error) {
-            setNotice({
-              type: "error",
-              message: retry.error.message || "Failed to save paper.",
-            });
-            setSavingMode(null);
-            return;
-          }
-        } else {
-          setNotice({
-            type: "error",
-            message: error.message || "Failed to save mock examination paper.",
-          });
-          setSavingMode(null);
-          return;
-        }
+        const retry = await supabase
+          .from("papers")
+          .insert(fallbackPayload);
+
+        insertError = retry.error;
+      }
+
+      if (insertError) {
+        throw new Error(`Could not save paper: ${insertError.message}`);
+      }
+
+      // Save answer key privately.
+      const { error: answerKeyError } = await supabase
+        .from("paper_answer_keys")
+        .upsert(
+          {
+            paper_id: paperId,
+            paper_text,
+            answer_key_text,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "paper_id" }
+        );
+
+      if (answerKeyError) {
+        // Roll back paper if the private answer key could not be saved.
+        const { error: rollbackError } = await supabase
+          .from("papers")
+          .delete()
+          .eq("id", paperId);
+
+        const rollbackMessage = rollbackError
+          ? ` The paper record could not be rolled back automatically: ${rollbackError.message}`
+          : "";
+
+        throw new Error(
+          `Paper was created, but saving its private answer key failed: ${answerKeyError.message}.${rollbackMessage}`
+        );
       }
 
       setNotice({
@@ -481,8 +639,12 @@ export default function AdminNewPaperPage() {
     } catch (err) {
       setNotice({
         type: "error",
-        message: err instanceof Error ? err.message : "An unexpected error occurred while saving.",
+        message:
+          err instanceof Error
+            ? err.message
+            : "An unexpected error occurred while saving.",
       });
+
       setSavingMode(null);
     }
   }
@@ -514,11 +676,14 @@ export default function AdminNewPaperPage() {
             <IconLayers className="h-4 w-4 text-slate-900" />
             Assessment Builder
           </div>
+
           <h1 className="text-2xl font-black tracking-tight text-slate-900 sm:text-3xl">
             Create Examination Paper
           </h1>
+
           <p className="text-xs text-slate-500">
-            Build single-topic practice drills or multi-sectional full mocks with strict sectional timing limits.
+            Build single-topic practice drills or multi-sectional full mocks
+            with strict sectional timing limits.
           </p>
         </div>
 
@@ -539,7 +704,9 @@ export default function AdminNewPaperPage() {
                 <IconCheckCircle className="h-4 w-4 text-emerald-600" />
               )}
             </div>
+
             <p className="flex-1 leading-relaxed">{notice.message}</p>
+
             <button
               type="button"
               onClick={() => setNotice(null)}
@@ -556,7 +723,9 @@ export default function AdminNewPaperPage() {
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2">
                 <IconDocumentText className="h-4 w-4 text-slate-700" />
-                <h2 className="text-sm font-bold text-slate-900">1. Exam Configuration</h2>
+                <h2 className="text-sm font-bold text-slate-900">
+                  1. Exam Configuration
+                </h2>
               </div>
 
               {/* Format Toggle Pill */}
@@ -572,6 +741,7 @@ export default function AdminNewPaperPage() {
                 >
                   Single Section
                 </button>
+
                 <button
                   type="button"
                   onClick={() => setPaperMode("full")}
@@ -591,6 +761,7 @@ export default function AdminNewPaperPage() {
                 <label className="text-xs font-bold uppercase tracking-wider text-slate-700">
                   Paper Title
                 </label>
+
                 <input
                   type="text"
                   required
@@ -606,10 +777,11 @@ export default function AdminNewPaperPage() {
                   <label className="text-xs font-bold uppercase tracking-wider text-slate-700">
                     Subject Section
                   </label>
+
                   <select
                     value={section}
                     onChange={(e) => setSection(e.target.value)}
-                    className="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3 py-2 text-xs font-semibold text-slate-800 focus:border-slate-900 focus:bg-white focus:outline-none sm:text-sm"
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3 py-2 text-xs font-semibold text-slate-800 focus:border-slate-900 focus:bg-white focus:outline-none"
                   >
                     {SECTION_PRESETS.map((s) => (
                       <option key={s} value={s}>
@@ -624,6 +796,7 @@ export default function AdminNewPaperPage() {
                   <label className="text-xs font-bold uppercase tracking-wider text-slate-700">
                     Total Duration (Auto-summed)
                   </label>
+
                   <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2 text-xs font-mono font-bold text-slate-900 sm:text-sm">
                     <IconClock className="h-4 w-4 text-slate-400" />
                     <span>{fullPreview?.totalMinutes || 0} Minutes</span>
@@ -638,10 +811,12 @@ export default function AdminNewPaperPage() {
                   <label className="text-xs font-bold uppercase tracking-wider text-slate-700">
                     Duration (Minutes)
                   </label>
+
                   <div className="relative">
                     <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
                       <IconClock className="h-4 w-4" />
                     </div>
+
                     <input
                       type="number"
                       min={1}
@@ -657,6 +832,7 @@ export default function AdminNewPaperPage() {
                   <label className="text-xs font-bold uppercase tracking-wider text-slate-700">
                     Marking Scheme
                   </label>
+
                   <div className="rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2 text-xs font-bold text-slate-700">
                     +1.00 Correct / −0.25 Penalty
                   </div>
@@ -675,8 +851,10 @@ export default function AdminNewPaperPage() {
                     <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900">
                       2. Sectional Allocation &amp; Pattern Presets
                     </h3>
+
                     <p className="text-[11px] text-slate-500">
-                      Apply an official examination blueprint or build your own custom multi-section layout (up to {MAX_SECTIONS}).
+                      Apply an official examination blueprint or build your
+                      own custom multi-section layout (up to {MAX_SECTIONS}).
                     </p>
                   </div>
 
@@ -686,6 +864,7 @@ export default function AdminNewPaperPage() {
                       <span className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-700">
                         {fullPreview.totalQ} Questions
                       </span>
+
                       <span className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-700">
                         {fullPreview.totalAns} Keys Paired
                       </span>
@@ -695,7 +874,10 @@ export default function AdminNewPaperPage() {
 
                 {/* Template Chips */}
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[11px] font-bold text-slate-400 mr-1">Apply Blueprint:</span>
+                  <span className="text-[11px] font-bold text-slate-400 mr-1">
+                    Apply Blueprint:
+                  </span>
+
                   {EXAM_TEMPLATES.map((t) => (
                     <button
                       key={t.id}
@@ -725,14 +907,21 @@ export default function AdminNewPaperPage() {
                             : "border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300 hover:bg-slate-100"
                         }`}
                       >
-                        <span className="font-mono text-[10px] opacity-70">{idx + 1}.</span>
+                        <span className="font-mono text-[10px] opacity-70">
+                          {idx + 1}.
+                        </span>
+
                         <span>{s.name}</span>
+
                         <span
                           className={`rounded-md px-1.5 py-0.2 text-[10px] font-mono ${
-                            isActive ? "bg-white/20 text-white" : "bg-white text-slate-500 border border-slate-200"
+                            isActive
+                              ? "bg-white/20 text-white"
+                              : "bg-white text-slate-500 border border-slate-200"
                           }`}
                         >
-                          {s.minutes}m {prev && prev.count > 0 ? `· ${prev.count}Q` : ""}
+                          {s.minutes}m{" "}
+                          {prev && prev.count > 0 ? `· ${prev.count}Q` : ""}
                         </span>
                       </button>
                     );
@@ -759,6 +948,7 @@ export default function AdminNewPaperPage() {
                         <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
                           Section Subject Label
                         </label>
+
                         <select
                           value={
                             SECTION_PRESETS.includes(
@@ -769,7 +959,9 @@ export default function AdminNewPaperPage() {
                           }
                           onChange={(e) => {
                             if (e.target.value === "__custom__") return;
-                            updateSection(activeSection.id, { name: e.target.value });
+                            updateSection(activeSection.id, {
+                              name: e.target.value,
+                            });
                           }}
                           className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-bold text-slate-900 focus:border-slate-900 focus:outline-none"
                         >
@@ -789,11 +981,14 @@ export default function AdminNewPaperPage() {
                           <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
                             Custom Name
                           </label>
+
                           <input
                             type="text"
                             value={activeSection.name}
                             onChange={(e) =>
-                              updateSection(activeSection.id, { name: e.target.value })
+                              updateSection(activeSection.id, {
+                                name: e.target.value,
+                              })
                             }
                             className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-bold focus:border-slate-900 focus:outline-none"
                             placeholder="Type title..."
@@ -805,6 +1000,7 @@ export default function AdminNewPaperPage() {
                         <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
                           Timer Limit
                         </label>
+
                         <div className="flex items-center gap-1">
                           <input
                             type="number"
@@ -818,7 +1014,10 @@ export default function AdminNewPaperPage() {
                             }
                             className="w-16 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs text-center font-bold text-slate-900 font-mono focus:border-slate-900 focus:bg-white focus:outline-none"
                           />
-                          <span className="text-xs font-bold text-slate-500">mins</span>
+
+                          <span className="text-xs font-bold text-slate-500">
+                            mins
+                          </span>
                         </div>
                       </div>
                     </div>
@@ -842,14 +1041,19 @@ export default function AdminNewPaperPage() {
                         <label className="text-xs font-bold uppercase tracking-wider text-slate-700">
                           Question Paper Text — {activeSection.name}
                         </label>
+
                         <span className="text-[10px] font-medium text-slate-400">
-                          {activeSection.paperText.length.toLocaleString()} characters
+                          {activeSection.paperText.length.toLocaleString()}{" "}
+                          characters
                         </span>
                       </div>
+
                       <textarea
                         value={activeSection.paperText}
                         onChange={(e) =>
-                          updateSection(activeSection.id, { paperText: e.target.value })
+                          updateSection(activeSection.id, {
+                            paperText: e.target.value,
+                          })
                         }
                         rows={10}
                         placeholder={`Paste questions for ${activeSection.name}...\n\nQ1. What is the value of...\nA) 10\nB) 20\nC) 30\nD) 40\nE) 50`}
@@ -862,17 +1066,23 @@ export default function AdminNewPaperPage() {
                         <IconKey className="h-3.5 w-3.5 text-slate-700" />
                         <span>Answer Key — {activeSection.name}</span>
                       </label>
+
                       <textarea
                         value={activeSection.keyText}
                         onChange={(e) =>
-                          updateSection(activeSection.id, { keyText: e.target.value })
+                          updateSection(activeSection.id, {
+                            keyText: e.target.value,
+                          })
                         }
                         rows={3}
                         placeholder={`1-C\n2-A\n3-E`}
                         className="w-full resize-y rounded-xl border border-slate-200 bg-slate-50/50 p-3.5 font-mono text-xs leading-relaxed text-slate-900 placeholder:text-slate-400 focus:border-slate-900 focus:bg-white focus:outline-none"
                       />
+
                       <p className="text-[11px] text-slate-400">
-                        Format: &quot;1-C&quot; or &quot;Q1. C&quot; on separate lines. Keys pair automatically with items in this section.
+                        Format: &quot;1-C&quot; or &quot;Q1. C&quot; on separate
+                        lines. Keys pair automatically with items in this
+                        section.
                       </p>
                     </div>
                   </div>
@@ -888,8 +1098,11 @@ export default function AdminNewPaperPage() {
                 <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                   <div className="flex items-center gap-2">
                     <IconDocumentText className="h-4 w-4 text-slate-700" />
-                    <h2 className="text-sm font-bold text-slate-900">2. Question Paper Text</h2>
+                    <h2 className="text-sm font-bold text-slate-900">
+                      2. Question Paper Text
+                    </h2>
                   </div>
+
                   {singlePreview && (
                     <span className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-xs font-bold text-slate-700">
                       {singlePreview.count} Questions recognized
@@ -905,8 +1118,10 @@ export default function AdminNewPaperPage() {
                     placeholder={`Paste questions here...\n\nQ1. Question text...\nA) Option A\nB) Option B\nC) Option C\nD) Option D\nE) Option E`}
                     className="w-full resize-y rounded-xl border border-slate-200 bg-slate-50/50 p-4 font-mono text-xs leading-relaxed text-slate-900 placeholder:text-slate-400 focus:border-slate-900 focus:bg-white focus:outline-none"
                   />
+
                   <p className="text-[11px] text-slate-400">
-                    Questions should begin with Q1., 1. followed by option markers A), B), C), D), E).
+                    Questions should begin with Q1., 1. followed by option
+                    markers A), B), C), D), E).
                   </p>
                 </div>
 
@@ -915,6 +1130,7 @@ export default function AdminNewPaperPage() {
                     <IconKey className="h-3.5 w-3.5 text-slate-700" />
                     <span>Answer Key Mapping</span>
                   </label>
+
                   <textarea
                     value={keyText}
                     onChange={(e) => setKeyText(e.target.value)}
